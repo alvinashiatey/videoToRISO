@@ -10,21 +10,49 @@ from layout import LayoutEngine
 
 
 class PreviewWindow(ctk.CTkToplevel):
-    def __init__(self, image_path, *args, **kwargs):
+    def __init__(self, image_paths, start_index=0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.title("Sheet Preview")
-        self.geometry("600x800")
+        self.geometry("600x850")
 
-        self.image_path = image_path
+        self.image_paths = image_paths
+        self.current_index = start_index
 
-        # Load and resize image for display
+        # Image Display
+        self.label = ctk.CTkLabel(self, text="")
+        self.label.pack(padx=20, pady=20)
+
+        # Navigation
+        self.frame_nav = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_nav.pack(pady=10, fill="x")
+
+        self.btn_prev = ctk.CTkButton(self.frame_nav, text="< Previous", command=self.show_prev,
+                                      width=100, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
+        self.btn_prev.pack(side="left", padx=20)
+
+        self.lbl_page = ctk.CTkLabel(
+            self.frame_nav, text=f"Page {self.current_index + 1} / {len(self.image_paths)}")
+        self.lbl_page.pack(side="left", expand=True)
+
+        self.btn_next = ctk.CTkButton(self.frame_nav, text="Next >", command=self.show_next,
+                                      width=100, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
+        self.btn_next.pack(side="right", padx=20)
+
+        self.btn_print = ctk.CTkButton(self, text="Print Sheet", command=self.print_sheet,
+                                       width=120, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
+        self.btn_print.pack(pady=(0, 20))
+
+        self.load_image()
+
+    def load_image(self):
         try:
-            pil_img = Image.open(self.image_path)
+            image_path = self.image_paths[self.current_index]
+            pil_img = Image.open(image_path)
 
             # Calculate resize to fit window
             w, h = pil_img.size
             aspect = w / h
-            display_h = 750
+            display_h = 700
             display_w = int(display_h * aspect)
 
             pil_img_small = pil_img.resize(
@@ -32,17 +60,108 @@ class PreviewWindow(ctk.CTkToplevel):
             self.photo_img = ctk.CTkImage(
                 light_image=pil_img_small, dark_image=pil_img_small, size=(display_w, display_h))
 
-            self.label = ctk.CTkLabel(self, image=self.photo_img, text="")
-            self.label.pack(padx=20, pady=20)
+            self.label.configure(image=self.photo_img)
+            self.lbl_page.configure(
+                text=f"Page {self.current_index + 1} / {len(self.image_paths)}")
+
+            # Update button states
+            self.btn_prev.configure(
+                state="normal" if self.current_index > 0 else "disabled")
+            self.btn_next.configure(state="normal" if self.current_index < len(
+                self.image_paths) - 1 else "disabled")
+
         except Exception as e:
-            ctk.CTkLabel(self, text=f"Error loading preview: {e}").pack(
-                padx=20, pady=20)
+            self.label.configure(
+                text=f"Error loading preview: {e}", image=None)
+
+    def show_prev(self):
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.load_image()
+
+    def show_next(self):
+        if self.current_index < len(self.image_paths) - 1:
+            self.current_index += 1
+            self.load_image()
+
+    def print_sheet(self):
+        import platform
+
+        current_file = self.image_paths[self.current_index]
+        current_file = os.path.abspath(current_file)
+        system_name = platform.system()
+
+        if system_name == "Windows":
+            try:
+                os.startfile(current_file, "print")
+            except Exception as e:
+                messagebox.showerror("Print Error", f"Could not print: {e}")
+        else:
+            # macOS / Linux - Use custom dialog
+            PrintDialog(current_file, master=self)
+
+
+class PrintDialog(ctk.CTkToplevel):
+    def __init__(self, file_path, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.title("Print Sheet")
+        self.geometry("400x250")
+        self.file_path = file_path
+
+        # Make modal
+        self.transient(self.master)
+        self.grab_set()
+
+        self.printers = self.get_printers()
+        self.selected_printer = ctk.StringVar(
+            value=self.printers[0] if self.printers else "Default")
+
+        ctk.CTkLabel(self, text="Select Printer:", font=(
+            "Arial", 14, "bold")).pack(pady=(20, 10))
+
+        self.option_menu = ctk.CTkOptionMenu(self, variable=self.selected_printer, values=self.printers if self.printers else [
+                                             "Default"], fg_color=RisoApp.COLOR_PRIMARY, button_color=RisoApp.COLOR_HOVER)
+        self.option_menu.pack(pady=10)
+
+        ctk.CTkButton(self, text="Print", command=self.print_file,
+                      fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER).pack(pady=20)
+        ctk.CTkButton(self, text="Cancel", command=self.destroy,
+                      fg_color="transparent", border_width=1).pack(pady=(0, 20))
+
+    def get_printers(self):
+        printers = []
+        try:
+            import subprocess
+            # macOS/Linux lpstat
+            result = subprocess.run(
+                ["lpstat", "-p"], capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if line.startswith("printer"):
+                    printers.append(line.split(' ')[1])
+        except:
+            pass
+        return printers
+
+    def print_file(self):
+        printer = self.selected_printer.get()
+        try:
+            import subprocess
+            cmd = ["lpr"]
+            if printer != "Default":
+                cmd.extend(["-P", printer])
+            cmd.append(self.file_path)
+
+            subprocess.run(cmd, check=True)
+            messagebox.showinfo("Success", "Sent to printer.")
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Print failed: {e}")
 
 
 class RisoApp(ctk.CTk):
-    COLOR_BG = "#313647"
-    COLOR_PRIMARY = "#435663"
-    COLOR_HOVER = "#32414b"
+    COLOR_BG = "#181818"
+    COLOR_PRIMARY = "#16476A"
+    COLOR_HOVER = "#132440"
 
     def __init__(self):
         super().__init__()
@@ -197,26 +316,50 @@ class RisoApp(ctk.CTk):
             self.generated_sheets = []
 
             # 3. Save & Separate
+            all_pdf_pages = []
+
+            # Temp dir for preview images
+            preview_dir = os.path.join(
+                tempfile.gettempdir(), "videoToRISO_preview")
+            if not os.path.exists(preview_dir):
+                os.makedirs(preview_dir)
+
+            self.generated_sheets = []
+
             for i, sheet in enumerate(sheets):
-                base_name = f"sheet_{i}"
+                # Save preview image (PNG) - Clean version
+                preview_path = os.path.join(preview_dir, f"preview_{i}.png")
+                sheet.save(preview_path)
+                self.generated_sheets.append(preview_path)
 
-                # Save composite (optional, but good for preview)
-                comp_path = os.path.join(
-                    output_dir, f"{base_name}_composite.png")
-                sheet.save(comp_path)
-                self.generated_sheets.append(comp_path)
+                # Add Composite to PDF list
+                labeled_sheet = layout.add_label(
+                    sheet, f"Sheet {i+1} - Composite")
+                all_pdf_pages.append(labeled_sheet)
 
-                # Channels
+                # Separate channels
                 channels = layout.separate_channels(sheet, mode="RGB")
+
                 if self.use_red.get():
-                    channels['Red'].save(os.path.join(
-                        output_dir, f"{base_name}_red.png"))
+                    lbl_red = layout.add_label(
+                        channels['Red'], f"Sheet {i+1} - Red Channel")
+                    all_pdf_pages.append(lbl_red)
+
                 if self.use_green.get():
-                    channels['Green'].save(os.path.join(
-                        output_dir, f"{base_name}_green.png"))
+                    lbl_green = layout.add_label(
+                        channels['Green'], f"Sheet {i+1} - Green Channel")
+                    all_pdf_pages.append(lbl_green)
+
                 if self.use_blue.get():
-                    channels['Blue'].save(os.path.join(
-                        output_dir, f"{base_name}_blue.png"))
+                    lbl_blue = layout.add_label(
+                        channels['Blue'], f"Sheet {i+1} - Blue Channel")
+                    all_pdf_pages.append(lbl_blue)
+
+            # Save single PDF
+            if all_pdf_pages:
+                pdf_path = os.path.join(output_dir, "output_sheets.pdf")
+                all_pdf_pages[0].save(
+                    pdf_path, save_all=True, append_images=all_pdf_pages[1:])
 
             self.after(0, self.on_success)
 
@@ -242,4 +385,4 @@ class RisoApp(ctk.CTk):
 
     def open_preview(self):
         if self.generated_sheets:
-            PreviewWindow(self.generated_sheets[0], self)
+            PreviewWindow(self.generated_sheets, start_index=0, master=self)

@@ -1,4 +1,5 @@
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw, ImageFont
+import platform
 
 
 class LayoutEngine:
@@ -129,3 +130,48 @@ class LayoutEngine:
             channels['Blue'] = b
 
         return channels
+
+    def add_label(self, image, text):
+        """
+        Adds a text label to the top-left of the image.
+        """
+        img_labeled = image.copy()
+        draw = ImageDraw.Draw(img_labeled)
+
+        # Font selection - aim for ~1/8 inch height (37px at 300dpi)
+        font_size = int(self.dpi / 8)
+        font = None
+
+        system = platform.system()
+        try:
+            if system == "Darwin":
+                font = ImageFont.truetype(
+                    "/System/Library/Fonts/Helvetica.ttc", font_size)
+            elif system == "Windows":
+                font = ImageFont.truetype("arial.ttf", font_size)
+            else:
+                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+        except:
+            try:
+                # Try loading without path
+                font = ImageFont.truetype("Arial", font_size)
+            except:
+                # Fallback
+                pass
+
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Position in top margin
+        x = self.margin
+        # Center vertically in the top margin space
+        y = (self.margin // 2) - (font_size // 2)
+
+        # Determine fill color (Black for RISO masters)
+        # If mode is L (grayscale), 0 is black.
+        # If mode is RGB, (0,0,0) is black.
+        fill_color = 0 if img_labeled.mode == 'L' else (0, 0, 0)
+
+        draw.text((x, y), text, fill=fill_color, font=font)
+
+        return img_labeled
