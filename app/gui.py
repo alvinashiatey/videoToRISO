@@ -3,277 +3,194 @@ from tkinter import filedialog, messagebox
 import threading
 import os
 import tempfile
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 
 from processor import VideoProcessor
 from layout import LayoutEngine
+from effects import ImageEffects
 
 
-class PreviewWindow(ctk.CTkToplevel):
-    def __init__(self, image_paths, start_index=0, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.title("Sheet Preview")
-        self.geometry("600x850")
+class IconGenerator:
+    @staticmethod
+    def create_video_icon(size=(20, 20), color="white"):
+        img = Image.new("RGBA", size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        # Film strip style
+        draw.rectangle([2, 4, 18, 16], outline=color, width=2)
+        draw.polygon([8, 6, 8, 14, 14, 10], fill=color)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=size)
 
-        self.image_paths = image_paths
-        self.current_index = start_index
+    @staticmethod
+    def create_folder_icon(size=(20, 20), color="white"):
+        img = Image.new("RGBA", size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        # Folder shape
+        draw.polygon([2, 4, 8, 4, 10, 6, 18, 6, 18, 16, 2, 16],
+                     outline=color, width=2)
+        draw.line([2, 8, 18, 8], fill=color, width=1)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=size)
 
-        # Image Display
-        self.label = ctk.CTkLabel(self, text="")
-        self.label.pack(padx=20, pady=20)
-
-        # Navigation
-        self.frame_nav = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_nav.pack(pady=10, fill="x")
-
-        self.btn_prev = ctk.CTkButton(self.frame_nav, text="< Previous", command=self.show_prev,
-                                      width=100, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
-        self.btn_prev.pack(side="left", padx=20)
-
-        self.lbl_page = ctk.CTkLabel(
-            self.frame_nav, text=f"Page {self.current_index + 1} / {len(self.image_paths)}")
-        self.lbl_page.pack(side="left", expand=True)
-
-        self.btn_next = ctk.CTkButton(self.frame_nav, text="Next >", command=self.show_next,
-                                      width=100, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
-        self.btn_next.pack(side="right", padx=20)
-
-        self.btn_print = ctk.CTkButton(self, text="Print Sheet", command=self.print_sheet,
-                                       width=120, fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER)
-        self.btn_print.pack(pady=(0, 20))
-
-        self.load_image()
-
-    def load_image(self):
-        try:
-            image_path = self.image_paths[self.current_index]
-            pil_img = Image.open(image_path)
-
-            # Calculate resize to fit window
-            w, h = pil_img.size
-            aspect = w / h
-            display_h = 700
-            display_w = int(display_h * aspect)
-
-            pil_img_small = pil_img.resize(
-                (display_w, display_h), Image.Resampling.LANCZOS)
-            self.photo_img = ctk.CTkImage(
-                light_image=pil_img_small, dark_image=pil_img_small, size=(display_w, display_h))
-
-            self.label.configure(image=self.photo_img)
-            self.lbl_page.configure(
-                text=f"Page {self.current_index + 1} / {len(self.image_paths)}")
-
-            # Update button states
-            self.btn_prev.configure(
-                state="normal" if self.current_index > 0 else "disabled")
-            self.btn_next.configure(state="normal" if self.current_index < len(
-                self.image_paths) - 1 else "disabled")
-
-        except Exception as e:
-            self.label.configure(
-                text=f"Error loading preview: {e}", image=None)
-
-    def show_prev(self):
-        if self.current_index > 0:
-            self.current_index -= 1
-            self.load_image()
-
-    def show_next(self):
-        if self.current_index < len(self.image_paths) - 1:
-            self.current_index += 1
-            self.load_image()
-
-    def print_sheet(self):
-        import platform
-
-        current_file = self.image_paths[self.current_index]
-        current_file = os.path.abspath(current_file)
-        system_name = platform.system()
-
-        if system_name == "Windows":
-            try:
-                os.startfile(current_file, "print")
-            except Exception as e:
-                messagebox.showerror("Print Error", f"Could not print: {e}")
-        else:
-            # macOS / Linux - Use custom dialog
-            PrintDialog(current_file, master=self)
-
-
-class PrintDialog(ctk.CTkToplevel):
-    def __init__(self, file_path, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.title("Print Sheet")
-        self.geometry("400x250")
-        self.file_path = file_path
-
-        # Make modal
-        self.transient(self.master)
-        self.grab_set()
-
-        self.printers = self.get_printers()
-        self.selected_printer = ctk.StringVar(
-            value=self.printers[0] if self.printers else "Default")
-
-        ctk.CTkLabel(self, text="Select Printer:", font=(
-            "Arial", 14, "bold")).pack(pady=(20, 10))
-
-        self.option_menu = ctk.CTkOptionMenu(self, variable=self.selected_printer, values=self.printers if self.printers else [
-                                             "Default"], fg_color=RisoApp.COLOR_PRIMARY, button_color=RisoApp.COLOR_HOVER)
-        self.option_menu.pack(pady=10)
-
-        ctk.CTkButton(self, text="Print", command=self.print_file,
-                      fg_color=RisoApp.COLOR_PRIMARY, hover_color=RisoApp.COLOR_HOVER).pack(pady=20)
-        ctk.CTkButton(self, text="Cancel", command=self.destroy,
-                      fg_color="transparent", border_width=1).pack(pady=(0, 20))
-
-    def get_printers(self):
-        printers = []
-        try:
-            import subprocess
-            # macOS/Linux lpstat
-            result = subprocess.run(
-                ["lpstat", "-p"], capture_output=True, text=True)
-            for line in result.stdout.split('\n'):
-                if line.startswith("printer"):
-                    printers.append(line.split(' ')[1])
-        except:
-            pass
-        return printers
-
-    def print_file(self):
-        printer = self.selected_printer.get()
-        try:
-            import subprocess
-            cmd = ["lpr"]
-            if printer != "Default":
-                cmd.extend(["-P", printer])
-            cmd.append(self.file_path)
-
-            subprocess.run(cmd, check=True)
-            messagebox.showinfo("Success", "Sent to printer.")
-            self.destroy()
-        except Exception as e:
-            messagebox.showerror("Error", f"Print failed: {e}")
+    @staticmethod
+    def create_play_icon(size=(20, 20), color="white"):
+        img = Image.new("RGBA", size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        # Play triangle
+        draw.polygon([6, 4, 6, 16, 16, 10], fill=color)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=size)
 
 
 class RisoApp(ctk.CTk):
     COLOR_BG = "#181818"
-    COLOR_PRIMARY = "#16476A"
-    COLOR_HOVER = "#132440"
+    COLOR_PRIMARY = "#8FA31E"
+    COLOR_HOVER = "#556B2F"
 
     def __init__(self):
         super().__init__()
 
         self.title("Video to RISO")
         self.geometry("500x700")
+        self.resizable(False, False)
         self.configure(fg_color=self.COLOR_BG)
 
         self.grid_columnconfigure(0, weight=1)
 
         # --- Variables ---
         self.video_path = ctk.StringVar()
-        self.output_path = ctk.StringVar(
-            value=os.path.join(tempfile.gettempdir(), "videoToRISO_output"))
-        self.columns = ctk.IntVar(value=3)
-        self.interval = ctk.StringVar(value="1.0")
+        self.video_name_display = ctk.StringVar(value="No file selected")
+
+        default_out = os.path.join(tempfile.gettempdir(), "videoToRISO_output")
+        self.output_path = ctk.StringVar(value=default_out)
+        self.output_name_display = ctk.StringVar(
+            value=os.path.basename(default_out) or default_out)
+
+        self.columns = ctk.IntVar(value=5)
+        self.interval = ctk.StringVar(value="0.5")
+        self.selected_effect = ctk.StringVar(value="None")
 
         self.use_red = ctk.BooleanVar(value=True)
         self.use_green = ctk.BooleanVar(value=True)
         self.use_blue = ctk.BooleanVar(value=True)
 
-        self.generated_sheets = []  # Store paths of generated sheets
+        # Icons
+        self.icon_video = IconGenerator.create_video_icon()
+        self.icon_folder = IconGenerator.create_folder_icon()
+        self.icon_play = IconGenerator.create_play_icon()
 
         # --- UI ---
         self.create_ui()
 
     def create_ui(self):
-        # File Selection
-        frame_file = ctk.CTkFrame(self)
-        frame_file.pack(pady=10, padx=20, fill="x")
+        # Main Container with padding
+        main_container = ctk.CTkFrame(self, fg_color="transparent")
+        main_container.pack(fill="both", expand=True, padx=20, pady=20)
 
-        ctk.CTkLabel(frame_file, text="Video File:").pack(
-            anchor="w", padx=10, pady=(10, 0))
-        entry_file = ctk.CTkEntry(
-            frame_file, textvariable=self.video_path, placeholder_text="Select video file...")
-        entry_file.pack(side="left", padx=10, pady=10, fill="x", expand=True)
-        ctk.CTkButton(frame_file, text="Browse", width=80, command=self.browse_file, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(
-            side="right", padx=10, pady=10)
+        # File Selection Card
+        card_file = ctk.CTkFrame(main_container)
+        card_file.pack(pady=(0, 15), fill="x")
 
-        # Output Selection
-        frame_out = ctk.CTkFrame(self)
-        frame_out.pack(pady=10, padx=20, fill="x")
+        ctk.CTkLabel(card_file, text="Video Source", font=(
+            "Arial", 13, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
 
-        ctk.CTkLabel(frame_out, text="Output Directory:").pack(
-            anchor="w", padx=10, pady=(10, 0))
-        entry_out = ctk.CTkEntry(frame_out, textvariable=self.output_path)
-        entry_out.pack(side="left", padx=10, pady=10, fill="x", expand=True)
-        ctk.CTkButton(frame_out, text="Browse", width=80, command=self.browse_output, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(
-            side="right", padx=10, pady=10)
+        file_row = ctk.CTkFrame(card_file, fg_color="transparent")
+        file_row.pack(fill="x", padx=10, pady=(0, 15))
 
-        # Settings
-        frame_settings = ctk.CTkFrame(self)
-        frame_settings.pack(pady=10, padx=20, fill="x")
-        ctk.CTkLabel(frame_settings, text="Settings", font=(
-            "Arial", 14, "bold")).pack(anchor="w", padx=10, pady=10)
+        ctk.CTkButton(file_row, text="Select Video", image=self.icon_video, compound="left", width=140,
+                      command=self.browse_file, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(side="left", padx=5)
+
+        ctk.CTkLabel(file_row, textvariable=self.video_name_display,
+                     text_color="gray").pack(side="left", padx=10)
+
+        # Output Selection Card
+        card_out = ctk.CTkFrame(main_container)
+        card_out.pack(pady=(0, 15), fill="x")
+
+        ctk.CTkLabel(card_out, text="Output Location", font=(
+            "Arial", 13, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
+
+        out_row = ctk.CTkFrame(card_out, fg_color="transparent")
+        out_row.pack(fill="x", padx=10, pady=(0, 15))
+
+        ctk.CTkButton(out_row, text="Select Folder", image=self.icon_folder, compound="left", width=140,
+                      command=self.browse_output, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(side="left", padx=5)
+
+        ctk.CTkLabel(out_row, textvariable=self.output_name_display,
+                     text_color="gray").pack(side="left", padx=10)
+
+        # Settings Card
+        card_settings = ctk.CTkFrame(main_container)
+        card_settings.pack(pady=(0, 15), fill="x")
+        ctk.CTkLabel(card_settings, text="Configuration", font=(
+            "Arial", 13, "bold")).pack(anchor="w", padx=15, pady=(15, 10))
+
+        # Grid layout for settings
+        settings_grid = ctk.CTkFrame(card_settings, fg_color="transparent")
+        settings_grid.pack(fill="x", padx=10, pady=(0, 15))
 
         # Columns
-        frame_cols = ctk.CTkFrame(frame_settings, fg_color="transparent")
-        frame_cols.pack(fill="x", padx=10)
-        ctk.CTkLabel(frame_cols, text="Columns:").pack(side="left")
-        ctk.CTkSlider(frame_cols, from_=1, to=10, number_of_steps=9, variable=self.columns, button_color=self.COLOR_PRIMARY, progress_color=self.COLOR_PRIMARY).pack(
-            side="left", padx=10, fill="x", expand=True)
-        ctk.CTkLabel(frame_cols, textvariable=self.columns,
-                     width=20).pack(side="right")
+        ctk.CTkLabel(settings_grid, text="Columns:").grid(
+            row=0, column=0, sticky="w", padx=5, pady=5)
+        ctk.CTkSlider(settings_grid, from_=1, to=10, number_of_steps=9, variable=self.columns,
+                      button_color=self.COLOR_PRIMARY, progress_color=self.COLOR_PRIMARY).grid(row=0, column=1, sticky="ew", padx=5)
+        ctk.CTkLabel(settings_grid, textvariable=self.columns,
+                     width=20).grid(row=0, column=2, padx=5)
 
         # Interval
-        frame_int = ctk.CTkFrame(frame_settings, fg_color="transparent")
-        frame_int.pack(fill="x", padx=10, pady=10)
-        ctk.CTkLabel(frame_int, text="Capture Interval (sec):").pack(
-            side="left")
-        ctk.CTkEntry(frame_int, textvariable=self.interval,
-                     width=60).pack(side="right")
+        ctk.CTkLabel(settings_grid, text="Interval (s):").grid(
+            row=1, column=0, sticky="w", padx=5, pady=5)
+        ctk.CTkEntry(settings_grid, textvariable=self.interval,
+                     width=60).grid(row=1, column=1, sticky="w", padx=5)
 
-        # Channels
-        frame_channels = ctk.CTkFrame(self)
-        frame_channels.pack(pady=10, padx=20, fill="x")
-        ctk.CTkLabel(frame_channels, text="RISO Channels (RGB)", font=(
-            "Arial", 14, "bold")).pack(anchor="w", padx=10, pady=10)
+        # Effects
+        ctk.CTkLabel(settings_grid, text="Effect:").grid(
+            row=2, column=0, sticky="w", padx=5, pady=5)
+        ctk.CTkOptionMenu(settings_grid, variable=self.selected_effect, values=ImageEffects.OPTIONS,
+                          fg_color=self.COLOR_PRIMARY, button_color=self.COLOR_HOVER).grid(row=2, column=1, sticky="w", padx=5)
 
-        grid_ch = ctk.CTkFrame(frame_channels, fg_color="transparent")
-        grid_ch.pack(padx=10, pady=(0, 10))
-        ctk.CTkCheckBox(grid_ch, text="Red", variable=self.use_red, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(
-            side="left", padx=10)
-        ctk.CTkCheckBox(grid_ch, text="Green", variable=self.use_green, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(
-            side="left", padx=10)
-        ctk.CTkCheckBox(grid_ch, text="Blue", variable=self.use_blue, fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).pack(
-            side="left", padx=10)
+        settings_grid.columnconfigure(1, weight=1)
+
+        # Channels Card
+        card_channels = ctk.CTkFrame(main_container)
+        card_channels.pack(pady=(0, 15), fill="x")
+        ctk.CTkLabel(card_channels, text="RISO Channels", font=(
+            "Arial", 13, "bold")).pack(anchor="w", padx=15, pady=(15, 10))
+
+        grid_ch = ctk.CTkFrame(card_channels, fg_color="transparent")
+        grid_ch.pack(padx=10, pady=(0, 15), fill="x")
+
+        # Use grid for even spacing
+        grid_ch.columnconfigure((0, 1, 2), weight=1)
+        ctk.CTkCheckBox(grid_ch, text="Red", variable=self.use_red,
+                        fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=0)
+        ctk.CTkCheckBox(grid_ch, text="Green", variable=self.use_green,
+                        fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=1)
+        ctk.CTkCheckBox(grid_ch, text="Blue", variable=self.use_blue,
+                        fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=2)
 
         # Actions
         self.btn_run = ctk.CTkButton(
-            self, text="Generate Sheets", command=self.start_generation, height=40, font=("Arial", 16), fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER)
-        self.btn_run.pack(pady=20, padx=20, fill="x")
+            main_container, text="Generate Sheets", image=self.icon_play, compound="left",
+            command=self.start_generation, height=50, font=("Arial", 16, "bold"),
+            fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER)
+        self.btn_run.pack(pady=10, fill="x")
 
         self.progress = ctk.CTkProgressBar(
-            self, progress_color=self.COLOR_PRIMARY)
-        self.progress.pack(pady=(0, 20), padx=20, fill="x")
+            main_container, progress_color=self.COLOR_PRIMARY)
+        self.progress.pack(pady=(0, 10), fill="x")
         self.progress.set(0)
-
-        self.btn_preview = ctk.CTkButton(
-            self, text="View Last Generated Sheet", command=self.open_preview, state="disabled", fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER)
-        self.btn_preview.pack(pady=(0, 20), padx=20)
 
     def browse_file(self):
         f = filedialog.askopenfilename(
             filetypes=[("Video Files", "*.mp4 *.mov *.avi *.mkv")])
         if f:
             self.video_path.set(f)
+            self.video_name_display.set(os.path.basename(f))
 
     def browse_output(self):
         d = filedialog.askdirectory()
         if d:
             self.output_path.set(d)
+            self.output_name_display.set(
+                os.path.basename(d) if os.path.basename(d) else d)
 
     def start_generation(self):
         if not self.video_path.get():
@@ -317,21 +234,9 @@ class RisoApp(ctk.CTk):
 
             # 3. Save & Separate
             all_pdf_pages = []
-
-            # Temp dir for preview images
-            preview_dir = os.path.join(
-                tempfile.gettempdir(), "videoToRISO_preview")
-            if not os.path.exists(preview_dir):
-                os.makedirs(preview_dir)
-
-            self.generated_sheets = []
+            effect_name = self.selected_effect.get()
 
             for i, sheet in enumerate(sheets):
-                # Save preview image (PNG) - Clean version
-                preview_path = os.path.join(preview_dir, f"preview_{i}.png")
-                sheet.save(preview_path)
-                self.generated_sheets.append(preview_path)
-
                 # Add Composite to PDF list
                 labeled_sheet = layout.add_label(
                     sheet, f"Sheet {i+1} - Composite")
@@ -341,48 +246,62 @@ class RisoApp(ctk.CTk):
                 channels = layout.separate_channels(sheet, mode="RGB")
 
                 if self.use_red.get():
+                    img_red = ImageEffects.apply_effect(
+                        channels['Red'], effect_name)
                     lbl_red = layout.add_label(
-                        channels['Red'], f"Sheet {i+1} - Red Channel")
+                        img_red, f"Sheet {i+1} - Red Channel")
                     all_pdf_pages.append(lbl_red)
 
                 if self.use_green.get():
+                    img_green = ImageEffects.apply_effect(
+                        channels['Green'], effect_name)
                     lbl_green = layout.add_label(
-                        channels['Green'], f"Sheet {i+1} - Green Channel")
+                        img_green, f"Sheet {i+1} - Green Channel")
                     all_pdf_pages.append(lbl_green)
 
                 if self.use_blue.get():
+                    img_blue = ImageEffects.apply_effect(
+                        channels['Blue'], effect_name)
                     lbl_blue = layout.add_label(
-                        channels['Blue'], f"Sheet {i+1} - Blue Channel")
+                        img_blue, f"Sheet {i+1} - Blue Channel")
                     all_pdf_pages.append(lbl_blue)
 
             # Save single PDF
+            pdf_path = None
             if all_pdf_pages:
                 pdf_path = os.path.join(output_dir, "output_sheets.pdf")
                 all_pdf_pages[0].save(
                     pdf_path, save_all=True, append_images=all_pdf_pages[1:])
 
-            self.after(0, self.on_success)
+            self.after(0, lambda: self.on_success(pdf_path))
 
         except Exception as e:
             self.after(0, lambda: self.on_error(str(e)))
 
-    def on_success(self):
+    def on_success(self, pdf_path):
         self.progress.stop()
         self.progress.set(1)
         self.btn_run.configure(state="normal")
-        self.btn_preview.configure(state="normal")
-        messagebox.showinfo(
-            "Success", f"Generated {len(self.generated_sheets)} sheets.")
 
-        # Auto open preview of first sheet
-        if self.generated_sheets:
-            self.open_preview()
+        if pdf_path and os.path.exists(pdf_path):
+            # Open the PDF
+            import platform
+            import subprocess
+
+            try:
+                if platform.system() == 'Darwin':       # macOS
+                    subprocess.call(('open', pdf_path))
+                elif platform.system() == 'Windows':    # Windows
+                    os.startfile(pdf_path)
+                else:                                   # linux variants
+                    subprocess.call(('xdg-open', pdf_path))
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not open PDF: {e}")
+        else:
+            messagebox.showinfo(
+                "Success", "Process completed, but no PDF was generated.")
 
     def on_error(self, msg):
         self.progress.stop()
         self.btn_run.configure(state="normal")
         messagebox.showerror("Error", msg)
-
-    def open_preview(self):
-        if self.generated_sheets:
-            PreviewWindow(self.generated_sheets, start_index=0, master=self)
