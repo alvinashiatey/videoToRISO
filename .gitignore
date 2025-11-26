@@ -214,3 +214,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+#homebrew
+*.bottle.tar.gz
+*.bottle.json
+homebrew/

@@ -1,40 +1,39 @@
-# Publishing to Homebrew
+# Publishing to Homebrew (Cask)
 
-To allow users to install your app using `brew install videoToRISO`, follow these steps:
+To allow users to install your app using `brew install --cask videotoriso`, follow these steps:
 
 ## 1. Create a GitHub Release
 
-1. Push your code to GitHub.
-2. Go to "Releases" > "Draft a new release".
-3. Tag it `v1.0.0`.
-4. Publish the release.
-5. Copy the link to the "Source code (tar.gz)".
-
-## 2. Update the Formula
-
-1. Open `homebrew/videoToRISO.rb`.
-2. Update `homepage` and `url` with your GitHub repository details.
-3. Download the tar.gz file you just released and calculate its SHA256 hash:
+1. Push your code to GitHub with a tag (e.g., `v1.0.0`).
    ```bash
-   shasum -a 256 path/to/v1.0.0.tar.gz
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
-4. Update the `sha256` field in `videoToRISO.rb` with this hash.
+2. The **GitHub Action** will automatically build the app, create a release, and upload `VideoToRISO.zip`.
+
+## 2. Update the Cask
+
+1. Once the release is ready, download the `VideoToRISO.zip` from the GitHub Release page.
+2. Calculate its SHA256 hash:
+   ```bash
+   shasum -a 256 path/to/VideoToRISO.zip
+   ```
+3. Open `homebrew/videoToRISO.rb`.
+4. Update the `sha256` field with the new hash.
+5. Ensure the `version` matches your tag.
 
 ## 3. Create a Homebrew Tap
 
-1. Create a new public GitHub repository named `homebrew-tap` (or `homebrew-videoToRISO`).
-2. Add the `videoToRISO.rb` file to the root of this new repository.
-3. Push the changes.
+1. Create a new public GitHub repository named `homebrew-tap`.
+2. Create a `Casks` directory in that repo.
+3. Copy `homebrew/videoToRISO.rb` into the `Casks` directory of that repo (rename it to `videotoriso.rb` if you like).
+4. Push the changes.
 
 ## 4. Install
 
 Users can now install your app using:
 
 ```bash
-brew tap YOUR_USERNAME/tap
-brew install videoToRISO
+brew tap alvinashiatey/tap
+brew install --cask videotoriso
 ```
-
-## Note on Dependencies
-
-This formula uses a virtual environment to install the Python dependencies defined in your `setup.py`. This ensures they don't conflict with system Python packages.
