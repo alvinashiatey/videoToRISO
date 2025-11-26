@@ -1,5 +1,0 @@
-opencv-python
-Pillow
-numpy
-customtkinter
-packaging
