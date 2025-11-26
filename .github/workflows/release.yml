@@ -28,6 +28,24 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Generate App Icon
+        run: |
+          if [ -f "icons/appstore.png" ]; then
+              mkdir VideoToRISO.iconset
+              sips -z 16 16     icons/appstore.png --out VideoToRISO.iconset/icon_16x16.png
+              sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_16x16@2x.png
+              sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_32x32.png
+              sips -z 64 64     icons/appstore.png --out VideoToRISO.iconset/icon_32x32@2x.png
+              sips -z 128 128   icons/appstore.png --out VideoToRISO.iconset/icon_128x128.png
+              sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_128x128@2x.png
+              sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_256x256.png
+              sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_256x256@2x.png
+              sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_512x512.png
+              sips -z 1024 1024 icons/appstore.png --out VideoToRISO.iconset/icon_512x512@2x.png
+              iconutil -c icns VideoToRISO.iconset
+              rm -rf VideoToRISO.iconset
+          fi
+
       - name: Build Application
         run: |
           # Build command matching build.sh but without venv logic
@@ -35,6 +53,8 @@ jobs:
             --name "VideoToRISO" \
             --collect-all customtkinter \
             --paths app \
+            --add-data "icons:icons" \
+            --icon "VideoToRISO.icns" \
             "app/app.py"
 
       - name: Zip Application

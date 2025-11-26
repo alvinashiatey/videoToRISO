@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
 import os
+import sys
 import tempfile
 from PIL import Image, ImageTk, ImageDraw
 
@@ -52,6 +53,16 @@ class RisoApp(ctk.CTk):
         self.resizable(False, False)
         self.configure(fg_color=self.COLOR_BG)
 
+        # Set App Icon
+        try:
+            icon_path = self.resource_path("icons/appstore.png")
+            if os.path.exists(icon_path):
+                # Set window icon
+                icon_img = Image.open(icon_path)
+                self.iconphoto(True, ImageTk.PhotoImage(icon_img))
+        except Exception as e:
+            print(f"Failed to load icon: {e}")
+
         self.grid_columnconfigure(0, weight=1)
 
         # --- Variables ---
@@ -78,6 +89,16 @@ class RisoApp(ctk.CTk):
 
         # --- UI ---
         self.create_ui()
+
+    def resource_path(self, relative_path):
+        """ Get absolute path to resource, works for dev and for PyInstaller """
+        try:
+            # PyInstaller creates a temp folder and stores path in _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+
+        return os.path.join(base_path, relative_path)
 
     def create_ui(self):
         # Main Container with padding
