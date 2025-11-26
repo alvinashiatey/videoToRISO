@@ -33,25 +33,27 @@ rm -rf build dist *.spec *.icns
 
 # Generate ICNS file for macOS
 echo "🎨 Generating App Icon..."
-if [ -f "icons/appstore.png" ]; then
+ICON_SOURCE="icons/Assets.xcassets/AppIcon.appiconset/1024-mac.png"
+
+if [ -f "$ICON_SOURCE" ]; then
     mkdir VideoToRISO.iconset
-    sips -z 16 16     icons/appstore.png --out VideoToRISO.iconset/icon_16x16.png > /dev/null
-    sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_16x16@2x.png > /dev/null
-    sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_32x32.png > /dev/null
-    sips -z 64 64     icons/appstore.png --out VideoToRISO.iconset/icon_32x32@2x.png > /dev/null
-    sips -z 128 128   icons/appstore.png --out VideoToRISO.iconset/icon_128x128.png > /dev/null
-    sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_128x128@2x.png > /dev/null
-    sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_256x256.png > /dev/null
-    sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_256x256@2x.png > /dev/null
-    sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_512x512.png > /dev/null
-    sips -z 1024 1024 icons/appstore.png --out VideoToRISO.iconset/icon_512x512@2x.png > /dev/null
+    sips -z 16 16     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16.png > /dev/null
+    sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16@2x.png > /dev/null
+    sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32.png > /dev/null
+    sips -z 64 64     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32@2x.png > /dev/null
+    sips -z 128 128   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128.png > /dev/null
+    sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128@2x.png > /dev/null
+    sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256.png > /dev/null
+    sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256@2x.png > /dev/null
+    sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512.png > /dev/null
+    sips -z 1024 1024 "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512@2x.png > /dev/null
     
     iconutil -c icns VideoToRISO.iconset
     rm -rf VideoToRISO.iconset
     ICON_CMD="--icon=VideoToRISO.icns"
     echo "✅ Icon generated."
 else
-    echo "⚠️  icons/appstore.png not found. Skipping icon generation."
+    echo "⚠️  $ICON_SOURCE not found. Skipping icon generation."
     ICON_CMD=""
 fi
 

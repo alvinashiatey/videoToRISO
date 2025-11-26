@@ -30,18 +30,19 @@ jobs:
 
       - name: Generate App Icon
         run: |
-          if [ -f "icons/appstore.png" ]; then
+          ICON_SOURCE="icons/Assets.xcassets/AppIcon.appiconset/1024-mac.png"
+          if [ -f "$ICON_SOURCE" ]; then
               mkdir VideoToRISO.iconset
-              sips -z 16 16     icons/appstore.png --out VideoToRISO.iconset/icon_16x16.png
-              sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_16x16@2x.png
-              sips -z 32 32     icons/appstore.png --out VideoToRISO.iconset/icon_32x32.png
-              sips -z 64 64     icons/appstore.png --out VideoToRISO.iconset/icon_32x32@2x.png
-              sips -z 128 128   icons/appstore.png --out VideoToRISO.iconset/icon_128x128.png
-              sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_128x128@2x.png
-              sips -z 256 256   icons/appstore.png --out VideoToRISO.iconset/icon_256x256.png
-              sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_256x256@2x.png
-              sips -z 512 512   icons/appstore.png --out VideoToRISO.iconset/icon_512x512.png
-              sips -z 1024 1024 icons/appstore.png --out VideoToRISO.iconset/icon_512x512@2x.png
+              sips -z 16 16     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16.png
+              sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16@2x.png
+              sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32.png
+              sips -z 64 64     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32@2x.png
+              sips -z 128 128   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128.png
+              sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128@2x.png
+              sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256.png
+              sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256@2x.png
+              sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512.png
+              sips -z 1024 1024 "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512@2x.png
               iconutil -c icns VideoToRISO.iconset
               rm -rf VideoToRISO.iconset
           fi

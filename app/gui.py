@@ -55,7 +55,8 @@ class RisoApp(ctk.CTk):
 
         # Set App Icon
         try:
-            icon_path = self.resource_path("icons/appstore.png")
+            icon_path = self.resource_path(
+                "icons/Assets.xcassets/AppIcon.appiconset/1024-mac.png")
             if os.path.exists(icon_path):
                 # Set window icon
                 icon_img = Image.open(icon_path)
