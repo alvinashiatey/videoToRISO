@@ -4,32 +4,26 @@
 set -e
 
 APP_NAME="VideoToRISO"
-MAIN_SCRIPT="app/app.py"
+MAIN_SCRIPT="app/main.py"
 
 echo "🚀 Starting build process for $APP_NAME..."
 
-# Check if virtual environment exists, if not create it
-if [ ! -d ".venv" ] && [ ! -d "venv" ]; then
-    echo "📦 Creating virtual environment..."
-    python3 -m venv .venv
-    source .venv/bin/activate
-else
-    if [ -d ".venv" ]; then
-        source .venv/bin/activate
-    else
-        source venv/bin/activate
-    fi
+# Check if uv is installed
+if ! command -v uv &> /dev/null; then
+    echo "❌ uv is not installed. Please install it first."
+    exit 1
 fi
 
-# Install dependencies
-echo "⬇️  Installing dependencies..."
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install pyinstaller
+# Create/Sync virtual environment with uv
+echo "📦 Syncing environment with uv..."
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+uv pip install pyinstaller
 
 # Clean previous builds
 echo "🧹 Cleaning up previous builds..."
-rm -rf build dist *.spec *.icns
+rm -rf build dist *.spec *.icns VideoToRISO.iconset
 
 # Generate ICNS file for macOS
 echo "🎨 Generating App Icon..."
@@ -37,16 +31,16 @@ ICON_SOURCE="icons/Assets.xcassets/AppIcon.appiconset/1024-mac.png"
 
 if [ -f "$ICON_SOURCE" ]; then
     mkdir VideoToRISO.iconset
-    sips -z 16 16     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16.png > /dev/null
-    sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_16x16@2x.png > /dev/null
-    sips -z 32 32     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32.png > /dev/null
-    sips -z 64 64     "$ICON_SOURCE" --out VideoToRISO.iconset/icon_32x32@2x.png > /dev/null
-    sips -z 128 128   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128.png > /dev/null
-    sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_128x128@2x.png > /dev/null
-    sips -z 256 256   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256.png > /dev/null
-    sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_256x256@2x.png > /dev/null
-    sips -z 512 512   "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512.png > /dev/null
-    sips -z 1024 1024 "$ICON_SOURCE" --out VideoToRISO.iconset/icon_512x512@2x.png > /dev/null
+    sips -z 16 16     "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_16x16.png > /dev/null
+    sips -z 32 32     "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_16x16@2x.png > /dev/null
+    sips -z 32 32     "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_32x32.png > /dev/null
+    sips -z 64 64     "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_32x32@2x.png > /dev/null
+    sips -z 128 128   "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_128x128.png > /dev/null
+    sips -z 256 256   "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_128x128@2x.png > /dev/null
+    sips -z 256 256   "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_256x256.png > /dev/null
+    sips -z 512 512   "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_256x256@2x.png > /dev/null
+    sips -z 512 512   "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_512x512.png > /dev/null
+    sips -z 1024 1024 "$ICON_SOURCE" --setProperty format png --out VideoToRISO.iconset/icon_512x512@2x.png > /dev/null
     
     iconutil -c icns VideoToRISO.iconset
     rm -rf VideoToRISO.iconset
