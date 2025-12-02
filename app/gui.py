@@ -79,9 +79,10 @@ class RisoApp(ctk.CTk):
         self.interval = ctk.StringVar(value="0.5")
         self.selected_effect = ctk.StringVar(value="None")
 
-        self.use_red = ctk.BooleanVar(value=True)
-        self.use_green = ctk.BooleanVar(value=True)
-        self.use_blue = ctk.BooleanVar(value=True)
+        self.use_cyan = ctk.BooleanVar(value=True)
+        self.use_magenta = ctk.BooleanVar(value=True)
+        self.use_yellow = ctk.BooleanVar(value=True)
+        self.use_black = ctk.BooleanVar(value=True)
 
         # Icons
         self.icon_video = IconGenerator.create_video_icon()
@@ -180,13 +181,15 @@ class RisoApp(ctk.CTk):
         grid_ch.pack(padx=10, pady=(0, 15), fill="x")
 
         # Use grid for even spacing
-        grid_ch.columnconfigure((0, 1, 2), weight=1)
-        ctk.CTkCheckBox(grid_ch, text="Red", variable=self.use_red,
+        grid_ch.columnconfigure((0, 1, 2, 3), weight=1)
+        ctk.CTkCheckBox(grid_ch, text="Cyan", variable=self.use_cyan,
                         fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=0)
-        ctk.CTkCheckBox(grid_ch, text="Green", variable=self.use_green,
+        ctk.CTkCheckBox(grid_ch, text="Magenta", variable=self.use_magenta,
                         fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=1)
-        ctk.CTkCheckBox(grid_ch, text="Blue", variable=self.use_blue,
+        ctk.CTkCheckBox(grid_ch, text="Yellow", variable=self.use_yellow,
                         fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=2)
+        ctk.CTkCheckBox(grid_ch, text="Black", variable=self.use_black,
+                        fg_color=self.COLOR_PRIMARY, hover_color=self.COLOR_HOVER).grid(row=0, column=3)
 
         # Actions
         self.btn_run = ctk.CTkButton(
@@ -249,79 +252,131 @@ class RisoApp(ctk.CTk):
                     "No frames extracted. Check interval or video.")
 
             # 2. Layout
-            layout = LayoutEngine(paper_size="LETTER", dpi=300)
+            dpi = 300  # Standard print DPI
+            layout = LayoutEngine(paper_size="LETTER", dpi=dpi)
             sheets = layout.create_sheets(frames, columns=cols)
+            thumb_size = layout.get_thumbnail_size()
 
             self.generated_sheets = []
 
-            # 3. Save & Separate
-            all_pdf_pages = []
+            # 3. Save & Separate - collect composite and channel pages separately
+            composite_pages = []
+            channel_pages = []
             effect_name = self.selected_effect.get()
 
             for i, sheet in enumerate(sheets):
-                # Add Composite to PDF list
+                # Add Composite to composite list
                 labeled_sheet = layout.add_label(
                     sheet, f"Sheet {i+1} - Composite")
-                all_pdf_pages.append(labeled_sheet)
+                composite_pages.append(labeled_sheet)
 
-                # Separate channels
-                channels = layout.separate_channels(sheet, mode="RGB")
+                # Separate channels using CMYK for print
+                channels = layout.separate_channels(sheet, mode="CMYK")
 
-                if self.use_red.get():
-                    img_red = ImageEffects.apply_effect(
-                        channels['Red'], effect_name)
-                    lbl_red = layout.add_label(
-                        img_red, f"Sheet {i+1} - Red Channel")
-                    all_pdf_pages.append(lbl_red)
+                if self.use_cyan.get():
+                    img_cyan = ImageEffects.apply_effect(
+                        channels['Cyan'], effect_name,
+                        thumb_size_pixels=thumb_size, dpi=dpi)
+                    lbl_cyan = layout.add_label(
+                        img_cyan, f"Sheet {i+1} - Cyan Channel")
+                    channel_pages.append(lbl_cyan)
 
-                if self.use_green.get():
-                    img_green = ImageEffects.apply_effect(
-                        channels['Green'], effect_name)
-                    lbl_green = layout.add_label(
-                        img_green, f"Sheet {i+1} - Green Channel")
-                    all_pdf_pages.append(lbl_green)
+                if self.use_magenta.get():
+                    img_magenta = ImageEffects.apply_effect(
+                        channels['Magenta'], effect_name,
+                        thumb_size_pixels=thumb_size, dpi=dpi)
+                    lbl_magenta = layout.add_label(
+                        img_magenta, f"Sheet {i+1} - Magenta Channel")
+                    channel_pages.append(lbl_magenta)
 
-                if self.use_blue.get():
-                    img_blue = ImageEffects.apply_effect(
-                        channels['Blue'], effect_name)
-                    lbl_blue = layout.add_label(
-                        img_blue, f"Sheet {i+1} - Blue Channel")
-                    all_pdf_pages.append(lbl_blue)
+                if self.use_yellow.get():
+                    img_yellow = ImageEffects.apply_effect(
+                        channels['Yellow'], effect_name,
+                        thumb_size_pixels=thumb_size, dpi=dpi)
+                    lbl_yellow = layout.add_label(
+                        img_yellow, f"Sheet {i+1} - Yellow Channel")
+                    channel_pages.append(lbl_yellow)
 
-            # Save single PDF
-            pdf_path = None
-            if all_pdf_pages:
-                pdf_path = os.path.join(output_dir, "output_sheets.pdf")
-                all_pdf_pages[0].save(
-                    pdf_path, save_all=True, append_images=all_pdf_pages[1:])
+                if self.use_black.get():
+                    img_black = ImageEffects.apply_effect(
+                        channels['Black'], effect_name,
+                        thumb_size_pixels=thumb_size, dpi=dpi)
+                    lbl_black = layout.add_label(
+                        img_black, f"Sheet {i+1} - Black Channel")
+                    channel_pages.append(lbl_black)
 
-            self.after(0, lambda: self.on_success(pdf_path))
+            # Save separate PDFs for composites and channels
+            composite_pdf_path = None
+            channels_pdf_path = None
+
+            # Save composites PDF (RGB)
+            if composite_pages:
+                composite_pdf_path = os.path.join(output_dir, "composites.pdf")
+                composite_pages[0].save(
+                    composite_pdf_path,
+                    save_all=True,
+                    append_images=composite_pages[1:] if len(
+                        composite_pages) > 1 else [],
+                    resolution=300.0
+                )
+
+            # Save channels PDF (1-bit bitmap for sharp edges)
+            if channel_pages:
+                channels_pdf_path = os.path.join(output_dir, "channels.pdf")
+                # Ensure all channel pages are 1-bit for lossless compression
+                bitmap_pages = []
+                for page in channel_pages:
+                    if page.mode == '1':
+                        bitmap_pages.append(page)
+                    else:
+                        # Use thresholding for any remaining conversions
+                        bitmap_pages.append(page.convert(
+                            '1', dither=Image.Dither.NONE))
+
+                bitmap_pages[0].save(
+                    channels_pdf_path,
+                    save_all=True,
+                    append_images=bitmap_pages[1:] if len(
+                        bitmap_pages) > 1 else [],
+                    resolution=300.0
+                )
+
+            self.after(0, lambda: self.on_success(
+                composite_pdf_path, channels_pdf_path))
 
         except Exception as e:
             self.after(0, lambda: self.on_error(str(e)))
 
-    def on_success(self, pdf_path):
+    def on_success(self, composite_pdf_path, channels_pdf_path):
         self.progress.stop()
         self.progress.set(1)
         self.btn_run.configure(state="normal")
 
-        if pdf_path and os.path.exists(pdf_path):
-            # Open the PDF
-            import platform
-            import subprocess
+        import platform
+        import subprocess
 
-            try:
-                if platform.system() == 'Darwin':       # macOS
-                    subprocess.call(('open', pdf_path))
-                elif platform.system() == 'Windows':    # Windows
-                    os.startfile(pdf_path)
-                else:                                   # linux variants
-                    subprocess.call(('xdg-open', pdf_path))
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open PDF: {e}")
+        opened_files = []
+
+        # Open both PDFs
+        for pdf_path in [composite_pdf_path, channels_pdf_path]:
+            if pdf_path and os.path.exists(pdf_path):
+                opened_files.append(os.path.basename(pdf_path))
+                try:
+                    if platform.system() == 'Darwin':       # macOS
+                        subprocess.call(('open', pdf_path))
+                    elif platform.system() == 'Windows':    # Windows
+                        os.startfile(pdf_path)
+                    else:                                   # linux variants
+                        subprocess.call(('xdg-open', pdf_path))
+                except Exception as e:
+                    messagebox.showerror("Error", f"Could not open PDF: {e}")
+
+        if not opened_files:
+            messagebox.showinfo(
+                "Success", "Process completed, but no PDFs were generated.")
         else:
             messagebox.showinfo(
-                "Success", "Process completed, but no PDF was generated.")
+                "Success", f"Generated: {', '.join(opened_files)}")
 
     def on_error(self, msg):
         self.progress.stop()
