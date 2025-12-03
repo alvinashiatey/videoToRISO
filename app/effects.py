@@ -177,66 +177,239 @@ class ImageEffects:
 
         return image
 
+    # Cache for blue noise threshold matrices (void-and-cluster)
+    _blue_noise_cache = {}
+
+    @staticmethod
+    def _generate_void_and_cluster_matrix(size, cluster_size=3):
+        """
+        Generate a blue-noise threshold matrix using the void-and-cluster algorithm.
+        Based on Ostromoukhov & Hersch's "Stochastic Clustered-Dot Dithering" (1999).
+
+        The algorithm:
+        1. Start with initial binary pattern with blue noise distribution
+        2. Find the "tightest cluster" (densest area of minority pixels)
+        3. Find the "largest void" (sparsest area of minority pixels)
+        4. Swap cluster and void pixels, assign threshold ranks
+        5. Repeat until all pixels are ranked
+
+        Args:
+            size: Size of the square threshold matrix
+            cluster_size: Controls dot clustering (higher = larger clusters)
+
+        Returns:
+            numpy array with threshold values 0-255
+        """
+        import numpy as np
+        from scipy import ndimage
+
+        n = size
+
+        # Gaussian filter sigma for finding voids and clusters
+        # Larger sigma = more clustering (as per the paper)
+        sigma = cluster_size * 0.7
+
+        # Initialize with ~10% ones (minority pixels) in random positions
+        initial_density = 0.1
+        pattern = np.zeros((n, n), dtype=np.float32)
+        num_ones = int(n * n * initial_density)
+
+        # Place initial points with some spacing (proto-blue-noise)
+        indices = np.random.permutation(n * n)[:num_ones]
+        pattern.flat[indices] = 1
+
+        # Threshold matrix to build
+        threshold = np.zeros((n, n), dtype=np.float32)
+        rank = 0
+
+        # Phase 1: Remove ones (tightest cluster first) until none left
+        # This builds the first half of the threshold matrix (dark to mid)
+        ones_mask = pattern.copy()
+        ones_indices = []
+
+        while np.sum(ones_mask) > 0:
+            # Convolve to find cluster density
+            # Wrap mode for tileable pattern
+            density = ndimage.gaussian_filter(
+                ones_mask, sigma=sigma, mode='wrap')
+
+            # Find tightest cluster (highest density among ones)
+            density_ones = np.where(ones_mask > 0, density, -np.inf)
+            cluster_idx = np.unravel_index(np.argmax(density_ones), (n, n))
+
+            # Remove this pixel and record its rank
+            ones_mask[cluster_idx] = 0
+            ones_indices.append(cluster_idx)
+
+        # Assign ranks in reverse (first removed = highest threshold in this phase)
+        for i, idx in enumerate(reversed(ones_indices)):
+            threshold[idx] = i
+
+        # Phase 2: Add ones (largest void first) until all filled
+        # This builds the second half (mid to light)
+        zeros_mask = 1 - pattern  # Start with the complement
+        current = pattern.copy()
+
+        phase2_indices = []
+        while np.sum(zeros_mask) > 0:
+            # Convolve current pattern to find void density
+            density = ndimage.gaussian_filter(
+                current, sigma=sigma, mode='wrap')
+
+            # Find largest void (lowest density among zeros)
+            density_zeros = np.where(zeros_mask > 0, density, np.inf)
+            void_idx = np.unravel_index(np.argmin(density_zeros), (n, n))
+
+            # Add this pixel
+            current[void_idx] = 1
+            zeros_mask[void_idx] = 0
+            phase2_indices.append(void_idx)
+
+        # Assign remaining ranks
+        base_rank = len(ones_indices)
+        for i, idx in enumerate(phase2_indices):
+            threshold[idx] = base_rank + i
+
+        # Normalize to 0-255
+        threshold = (threshold / (n * n - 1) * 255).astype(np.uint8)
+
+        return threshold
+
+    @staticmethod
+    def _get_blue_noise_matrix(size, cluster_size=3):
+        """
+        Get or generate a cached blue noise threshold matrix.
+        """
+        import numpy as np
+
+        cache_key = (size, cluster_size)
+        if cache_key not in ImageEffects._blue_noise_cache:
+            try:
+                # Try to use scipy for proper void-and-cluster
+                ImageEffects._blue_noise_cache[cache_key] = \
+                    ImageEffects._generate_void_and_cluster_matrix(
+                        size, cluster_size)
+            except ImportError:
+                # Fallback: generate approximation without scipy
+                ImageEffects._blue_noise_cache[cache_key] = \
+                    ImageEffects._generate_blue_noise_fallback(
+                        size, cluster_size)
+
+        return ImageEffects._blue_noise_cache[cache_key]
+
+    @staticmethod
+    def _generate_blue_noise_fallback(size, cluster_size=3):
+        """
+        Fallback blue noise generation without scipy.
+        Uses a simpler approach based on Robert Bridson's algorithm concepts.
+        """
+        import numpy as np
+
+        n = size
+        threshold = np.zeros((n, n), dtype=np.float32)
+
+        # Generate points with minimum distance constraint (Poisson disk-like)
+        min_dist = cluster_size
+        points = []
+        grid = {}
+        cell_size = min_dist / np.sqrt(2)
+
+        def grid_key(x, y):
+            return (int(x / cell_size), int(y / cell_size))
+
+        def distance_ok(x, y):
+            gx, gy = grid_key(x, y)
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    key = ((gx + dx) % int(n / cell_size + 1),
+                           (gy + dy) % int(n / cell_size + 1))
+                    if key in grid:
+                        px, py = grid[key]
+                        # Toroidal distance
+                        ddx = min(abs(x - px), n - abs(x - px))
+                        ddy = min(abs(y - py), n - abs(y - py))
+                        if np.sqrt(ddx**2 + ddy**2) < min_dist:
+                            return False
+            return True
+
+        # Place initial points
+        attempts = 0
+        max_attempts = n * n * 10
+        while len(points) < n * n // (cluster_size * cluster_size) and attempts < max_attempts:
+            x = np.random.uniform(0, n)
+            y = np.random.uniform(0, n)
+            if distance_ok(x, y):
+                points.append((x, y))
+                grid[grid_key(x, y)] = (x, y)
+            attempts += 1
+
+        # Assign threshold values based on distance from seed points
+        for y in range(n):
+            for x in range(n):
+                min_d = float('inf')
+                for px, py in points:
+                    dx = min(abs(x - px), n - abs(x - px))
+                    dy = min(abs(y - py), n - abs(y - py))
+                    d = np.sqrt(dx**2 + dy**2)
+                    min_d = min(min_d, d)
+                # Closer to seed = lower threshold (prints first)
+                threshold[y, x] = min_d
+
+        # Normalize
+        threshold = (threshold - threshold.min()) / \
+            (threshold.max() - threshold.min()) * 255
+
+        # Add some noise to break up patterns
+        noise = np.random.uniform(-10, 10, (n, n))
+        threshold = np.clip(threshold + noise, 0, 255).astype(np.uint8)
+
+        return threshold
+
     @staticmethod
     def _organic_stochastic(img, cell_size):
         """
-        Create organic metaball-like stochastic dithering.
-        Uses smooth noise combined with image brightness for organic blob shapes.
-        Optimized with numpy for fast processing.
+        Stochastic clustered-dot dithering based on Ostromoukhov & Hersch (1999).
+
+        This implements FM (Frequency Modulated) screening with:
+        - Blue noise threshold matrix generated via void-and-cluster algorithm
+        - Clustered dots that grow from seed points (better printability)
+        - No visible periodic patterns (unlike AM halftoning)
+
+        The result mimics RISO printer stochastic screening characteristics.
 
         Args:
             img: Grayscale PIL Image
-            cell_size: Controls the scale of organic blobs
+            cell_size: Controls cluster size and dot density
         """
         import numpy as np
 
         width, height = img.size
 
         # Convert image to numpy array
-        img_array = np.array(img, dtype=np.float32) / 255.0
+        img_array = np.array(img, dtype=np.uint8)
 
-        # Blob scale - smaller value = smaller blobs
-        # Use cell_size * 0.4 for finer organic texture
-        blob_scale = max(4, cell_size * 0.4)
+        # Determine matrix size and cluster parameter
+        # Larger cell_size = larger clusters = coarser texture
+        matrix_size = 64  # Standard size, tiles across image
+        cluster_param = max(2, min(6, cell_size // 3))
 
-        # Create coordinate grids
-        y_coords, x_coords = np.mgrid[0:height, 0:width]
+        # Get the blue noise threshold matrix
+        threshold_matrix = ImageEffects._get_blue_noise_matrix(
+            matrix_size, cluster_param)
 
-        # Generate smooth noise using vectorized operations
-        # Use multiple sine waves at different frequencies for organic look
-        seed = np.random.randint(0, 1000)
+        # Tile the threshold matrix across the image
+        tiles_x = (width + matrix_size - 1) // matrix_size
+        tiles_y = (height + matrix_size - 1) // matrix_size
 
-        # Primary noise layer - large organic blobs
-        noise1 = np.sin(x_coords / blob_scale + seed) * \
-            np.cos(y_coords / blob_scale + seed * 0.7)
+        tiled_threshold = np.tile(threshold_matrix, (tiles_y, tiles_x))
+        tiled_threshold = tiled_threshold[:height, :width]
 
-        # Secondary layer - medium detail
-        noise2 = np.sin(x_coords / (blob_scale * 0.5) + seed * 1.3) * \
-            np.cos(y_coords / (blob_scale * 0.5) + seed * 0.5)
-
-        # Third layer - fine detail
-        noise3 = np.sin(x_coords / (blob_scale * 0.25) + seed * 2.1) * \
-            np.cos(y_coords / (blob_scale * 0.25) + seed * 1.7)
-
-        # Combine layers with decreasing weights (FBM-like)
-        noise = noise1 * 0.5 + noise2 * 0.3 + noise3 * 0.2
-
-        # Normalize to 0-1 range
-        noise = (noise + 1) / 2
-
-        # Create threshold based on noise
-        # Where noise is high, threshold is high (more likely to be white)
-        threshold = noise
-
-        # Apply threshold: darker image areas become black based on noise field
-        result = np.where(img_array < threshold, 0, 255).astype(np.uint8)
+        # Apply threshold: pixel is black if image value < threshold
+        # This creates the stochastic pattern where darker areas have more dots
+        result = np.where(img_array < tiled_threshold, 0, 255).astype(np.uint8)
 
         # Convert back to PIL Image
         out = Image.fromarray(result, mode='L')
-
-        # Slight blur + re-threshold for smoother blob edges
-        out = out.filter(ImageFilter.GaussianBlur(radius=0.8))
-        out = out.point(lambda x: 0 if x < 128 else 255)
 
         return out
 

@@ -10,6 +10,14 @@ from processor import VideoProcessor
 from layout import LayoutEngine
 from effects import ImageEffects
 
+# Import reconstruction module
+try:
+    from reconstruct import ScanProcessor, GridDetector, FrameExtractor, VideoAssembler
+    from reconstruct.metadata import MetadataEncoder, SheetMetadata
+    RECONSTRUCT_AVAILABLE = True
+except ImportError:
+    RECONSTRUCT_AVAILABLE = False
+
 
 class DesignToken:
     """Swiss/International Style Design System"""
@@ -99,8 +107,8 @@ class RisoApp(ctk.CTk):
         # Set dark appearance
         ctk.set_appearance_mode("dark")
 
-        self.title("VIDEO → RISO")
-        self.geometry("520x600")
+        self.title("VIDEO ⟷ RISO")
+        self.geometry("520x680")
         self.resizable(False, False)
         self.configure(fg_color=DesignToken.BG)
 
@@ -114,7 +122,7 @@ class RisoApp(ctk.CTk):
         except Exception as e:
             print(f"Failed to load icon: {e}")
 
-        # --- Variables ---
+        # --- Variables for Generate tab ---
         self.video_path = ctk.StringVar()
         self.video_name_display = ctk.StringVar(value="No file selected")
 
@@ -132,6 +140,22 @@ class RisoApp(ctk.CTk):
         self.use_magenta = ctk.BooleanVar(value=True)
         self.use_yellow = ctk.BooleanVar(value=True)
         self.use_black = ctk.BooleanVar(value=True)
+
+        # --- Variables for Reconstruct tab ---
+        self.scan_paths = []
+        self.scan_display = ctk.StringVar(value="No scans selected")
+        self.recon_output_path = ctk.StringVar(value=default_out)
+        self.recon_output_display = ctk.StringVar(
+            value=os.path.basename(default_out) or default_out)
+        self.recon_rows = ctk.StringVar(value="6")
+        self.recon_cols = ctk.StringVar(value="4")
+        self.recon_fps = ctk.StringVar(value="12")
+        self.recon_format = ctk.StringVar(value="MP4")
+        self.grid_mode = ctk.StringVar(value="Auto")
+
+        # Cached QR metadata from background scan (avoids re-scanning)
+        self.cached_scan_processors = []  # List of ScanProcessor objects with metadata
+        self.cached_qr_settings = None  # Combined settings from QR detection
 
         # Icons
         self.icon_arrow = IconGenerator.create_arrow_icon(
@@ -172,12 +196,39 @@ class RisoApp(ctk.CTk):
                        padx=DesignToken.SPACE_XL, pady=DesignToken.SPACE_XL)
 
         # ═══════════════════════════════════════════════════════════
+        # TAB VIEW - Generate / Reconstruct
+        # ═══════════════════════════════════════════════════════════
+        self.tabview = ctk.CTkTabview(
+            self.main,
+            fg_color=DesignToken.BG,
+            segmented_button_fg_color=DesignToken.CARD,
+            segmented_button_selected_color=DesignToken.BTN_PRIMARY,
+            segmented_button_selected_hover_color=DesignToken.BTN_PRIMARY_HOVER,
+            segmented_button_unselected_color=DesignToken.CARD,
+            segmented_button_unselected_hover_color=DesignToken.CARD_HOVER,
+            text_color=DesignToken.WHITE
+        )
+        self.tabview.pack(fill="both", expand=True)
+
+        # Add tabs
+        self.tab_generate = self.tabview.add("VIDEO → RISO")
+        self.tab_reconstruct = self.tabview.add("RISO → VIDEO")
+
+        # Build each tab
+        self.create_generate_tab()
+        self.create_reconstruct_tab()
+
+    def create_generate_tab(self):
+        """Create the Video to RISO generation tab."""
+        tab = self.tab_generate
+
+        # ═══════════════════════════════════════════════════════════
         # SECTION: INPUT (Single row layout)
         # ═══════════════════════════════════════════════════════════
-        self.create_section_label(self.main, "Input")
+        self.create_section_label(tab, "Input")
 
         input_section = ctk.CTkFrame(
-            self.main, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
         input_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
 
         input_inner = ctk.CTkFrame(input_section, fg_color="transparent")
@@ -239,10 +290,10 @@ class RisoApp(ctk.CTk):
         # ═══════════════════════════════════════════════════════════
         # SECTION: SETTINGS
         # ═══════════════════════════════════════════════════════════
-        self.create_section_label(self.main, "Settings")
+        self.create_section_label(tab, "Settings")
 
         settings_section = ctk.CTkFrame(
-            self.main, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
         settings_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
 
         settings_inner = ctk.CTkFrame(settings_section, fg_color="transparent")
@@ -334,10 +385,10 @@ class RisoApp(ctk.CTk):
         # ═══════════════════════════════════════════════════════════
         # SECTION: CHANNELS (Simple colored checkboxes)
         # ═══════════════════════════════════════════════════════════
-        self.create_section_label(self.main, "Channels")
+        self.create_section_label(tab, "Channels")
 
         channels_section = ctk.CTkFrame(
-            self.main, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
         channels_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
 
         channels_inner = ctk.CTkFrame(channels_section, fg_color="transparent")
@@ -380,7 +431,7 @@ class RisoApp(ctk.CTk):
         # GENERATE BUTTON
         # ═══════════════════════════════════════════════════════════
         self.btn_run = ctk.CTkButton(
-            self.main,
+            tab,
             text="GENERATE",
             command=self.start_generation,
             height=56,
@@ -395,7 +446,7 @@ class RisoApp(ctk.CTk):
 
         # Progress bar - minimal
         self.progress = ctk.CTkProgressBar(
-            self.main,
+            tab,
             height=4,
             corner_radius=2,
             fg_color=DesignToken.BORDER,
@@ -403,6 +454,617 @@ class RisoApp(ctk.CTk):
         )
         self.progress.pack(fill="x")
         self.progress.set(0)
+
+    def create_reconstruct_tab(self):
+        """Create the RISO to Video reconstruction tab."""
+        tab = self.tab_reconstruct
+
+        # ═══════════════════════════════════════════════════════════
+        # SECTION: SCAN INPUT
+        # ═══════════════════════════════════════════════════════════
+        self.create_section_label(tab, "Scanned Sheets")
+
+        scan_section = ctk.CTkFrame(
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+        scan_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
+
+        scan_inner = ctk.CTkFrame(scan_section, fg_color="transparent")
+        scan_inner.pack(fill="x", padx=DesignToken.SPACE_MD,
+                        pady=DesignToken.SPACE_MD)
+
+        # Row with scan input controls
+        scan_row = ctk.CTkFrame(scan_inner, fg_color="transparent")
+        scan_row.pack(fill="x")
+        scan_row.columnconfigure(1, weight=1)
+        scan_row.columnconfigure(3, weight=1)
+
+        # Scans button
+        ctk.CTkButton(
+            scan_row,
+            text="Scans",
+            width=70,
+            height=32,
+            command=self.browse_scans,
+            fg_color=DesignToken.BTN,
+            hover_color=DesignToken.BTN_HOVER,
+            text_color=DesignToken.WHITE,
+            corner_radius=DesignToken.RADIUS_SM,
+            font=DesignToken.get_font(12)
+        ).grid(row=0, column=0, sticky="w")
+
+        # Scan display
+        ctk.CTkLabel(
+            scan_row,
+            textvariable=self.scan_display,
+            font=DesignToken.get_font(11),
+            text_color=DesignToken.GRAY_400,
+            anchor="w"
+        ).grid(row=0, column=1, sticky="ew", padx=(DesignToken.SPACE_SM, DesignToken.SPACE_MD))
+
+        # Output button
+        ctk.CTkButton(
+            scan_row,
+            text="Output",
+            width=70,
+            height=32,
+            command=self.browse_recon_output,
+            fg_color=DesignToken.BTN,
+            hover_color=DesignToken.BTN_HOVER,
+            text_color=DesignToken.WHITE,
+            corner_radius=DesignToken.RADIUS_SM,
+            font=DesignToken.get_font(12)
+        ).grid(row=0, column=2, sticky="w")
+
+        # Output folder name
+        ctk.CTkLabel(
+            scan_row,
+            textvariable=self.recon_output_display,
+            font=DesignToken.get_font(11),
+            text_color=DesignToken.GRAY_400,
+            anchor="w"
+        ).grid(row=0, column=3, sticky="ew", padx=(DesignToken.SPACE_SM, 0))
+
+        # ═══════════════════════════════════════════════════════════
+        # SECTION: GRID SETTINGS
+        # ═══════════════════════════════════════════════════════════
+        self.create_section_label(tab, "Grid Detection")
+
+        grid_section = ctk.CTkFrame(
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+        grid_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
+
+        grid_inner = ctk.CTkFrame(grid_section, fg_color="transparent")
+        grid_inner.pack(fill="x", padx=DesignToken.SPACE_MD,
+                        pady=DesignToken.SPACE_MD)
+
+        # Detection mode selector
+        ctk.CTkLabel(
+            grid_inner,
+            text="MODE",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkSegmentedButton(
+            grid_inner,
+            values=["Auto", "Manual"],
+            variable=self.grid_mode,
+            command=self._on_grid_mode_change,
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            fg_color=DesignToken.BORDER,
+            selected_color=DesignToken.GRAY_500,
+            selected_hover_color=DesignToken.GRAY_400,
+            unselected_color=DesignToken.BORDER,
+            unselected_hover_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(11)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, DesignToken.SPACE_MD))
+
+        # Manual grid settings (rows/cols)
+        self.manual_grid_frame = ctk.CTkFrame(
+            grid_inner, fg_color="transparent")
+        self.manual_grid_frame.pack(fill="x")
+        self.manual_grid_frame.columnconfigure(0, weight=1)
+        self.manual_grid_frame.columnconfigure(1, weight=1)
+
+        # Rows
+        rows_frame = ctk.CTkFrame(
+            self.manual_grid_frame, fg_color="transparent")
+        rows_frame.grid(row=0, column=0, sticky="ew",
+                        padx=(0, DesignToken.SPACE_SM))
+
+        ctk.CTkLabel(
+            rows_frame,
+            text="ROWS",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkEntry(
+            rows_frame,
+            textvariable=self.recon_rows,
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            border_width=1,
+            border_color=DesignToken.BORDER,
+            fg_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
+
+        # Columns
+        cols_frame = ctk.CTkFrame(
+            self.manual_grid_frame, fg_color="transparent")
+        cols_frame.grid(row=0, column=1, sticky="ew",
+                        padx=(DesignToken.SPACE_SM, 0))
+
+        ctk.CTkLabel(
+            cols_frame,
+            text="COLUMNS",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkEntry(
+            cols_frame,
+            textvariable=self.recon_cols,
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            border_width=1,
+            border_color=DesignToken.BORDER,
+            fg_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
+
+        # ═══════════════════════════════════════════════════════════
+        # SECTION: OUTPUT SETTINGS
+        # ═══════════════════════════════════════════════════════════
+        self.create_section_label(tab, "Video Output")
+
+        output_section = ctk.CTkFrame(
+            tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
+        output_section.pack(fill="x", pady=(0, DesignToken.SPACE_LG))
+
+        output_inner = ctk.CTkFrame(output_section, fg_color="transparent")
+        output_inner.pack(fill="x", padx=DesignToken.SPACE_MD,
+                          pady=DesignToken.SPACE_MD)
+
+        output_row = ctk.CTkFrame(output_inner, fg_color="transparent")
+        output_row.pack(fill="x")
+        output_row.columnconfigure(0, weight=1)
+        output_row.columnconfigure(1, weight=1)
+
+        # FPS
+        fps_frame = ctk.CTkFrame(output_row, fg_color="transparent")
+        fps_frame.grid(row=0, column=0, sticky="ew",
+                       padx=(0, DesignToken.SPACE_SM))
+
+        ctk.CTkLabel(
+            fps_frame,
+            text="FPS",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkEntry(
+            fps_frame,
+            textvariable=self.recon_fps,
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            border_width=1,
+            border_color=DesignToken.BORDER,
+            fg_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
+
+        # Format dropdown
+        format_frame = ctk.CTkFrame(output_row, fg_color="transparent")
+        format_frame.grid(row=0, column=1, sticky="ew",
+                          padx=(DesignToken.SPACE_SM, 0))
+
+        ctk.CTkLabel(
+            format_frame,
+            text="FORMAT",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkOptionMenu(
+            format_frame,
+            variable=self.recon_format,
+            values=["MP4", "MOV", "GIF", "Image Sequence"],
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            fg_color=DesignToken.BTN,
+            button_color=DesignToken.GRAY_500,
+            button_hover_color=DesignToken.GRAY_400,
+            dropdown_fg_color=DesignToken.CARD,
+            dropdown_hover_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
+
+        # ═══════════════════════════════════════════════════════════
+        # RECONSTRUCT BUTTON
+        # ═══════════════════════════════════════════════════════════
+        self.btn_reconstruct = ctk.CTkButton(
+            tab,
+            text="RECONSTRUCT VIDEO",
+            command=self.start_reconstruction,
+            height=56,
+            corner_radius=DesignToken.RADIUS_SM,
+            fg_color=DesignToken.BTN_PRIMARY,
+            hover_color=DesignToken.BTN_PRIMARY_HOVER,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(16, "bold")
+        )
+        self.btn_reconstruct.pack(fill="x", pady=(
+            DesignToken.SPACE_SM, DesignToken.SPACE_MD))
+
+        # Progress bar - minimal
+        self.recon_progress = ctk.CTkProgressBar(
+            tab,
+            height=4,
+            corner_radius=2,
+            fg_color=DesignToken.BORDER,
+            progress_color=DesignToken.GRAY_500
+        )
+        self.recon_progress.pack(fill="x")
+        self.recon_progress.set(0)
+
+        # Initially hide manual grid settings if auto mode
+        self._on_grid_mode_change(self.grid_mode.get())
+
+    def _on_grid_mode_change(self, mode):
+        """Show/hide manual grid settings based on mode."""
+        if mode == "Manual":
+            self.manual_grid_frame.pack(fill="x")
+        else:
+            # Keep it visible but could disable in future
+            pass
+
+    def browse_scans(self):
+        """Browse for scanned contact sheet images."""
+        files = filedialog.askopenfilenames(
+            filetypes=[
+                ("Image Files", "*.png *.jpg *.jpeg *.tiff *.tif *.bmp"),
+                ("PDF Files", "*.pdf"),
+                ("All Files", "*.*")
+            ]
+        )
+        if files:
+            self.scan_paths = list(files)
+
+            # Clear cached data from previous selection
+            self.cached_scan_processors = []
+            self.cached_qr_settings = None
+
+            if len(files) == 1:
+                self.scan_display.set(os.path.basename(files[0]))
+            else:
+                self.scan_display.set(f"{len(files)} files selected")
+
+            # Start background thread to detect QR metadata
+            if RECONSTRUCT_AVAILABLE:
+                threading.Thread(
+                    target=self._detect_qr_metadata_async,
+                    args=(list(files),),
+                    daemon=True
+                ).start()
+
+    def _detect_qr_metadata_async(self, file_paths):
+        """Background thread to detect QR metadata from scanned files."""
+        print(
+            f"[QR DEBUG] Starting async QR detection for {len(file_paths)} file(s)")
+        try:
+            detected_settings = None
+            processors = []
+
+            for scan_path in file_paths:
+                print(f"[QR DEBUG] Processing: {scan_path}")
+                try:
+                    processor = ScanProcessor(scan_path)
+                    processors.append(processor)
+                    print(
+                        f"[QR DEBUG] Loaded {len(processor.images)} image(s)")
+                    print(f"[QR DEBUG] Metadata list: {processor.metadata}")
+                    print(
+                        f"[QR DEBUG] Has metadata: {processor.has_metadata()}")
+
+                    if not detected_settings and processor.has_metadata():
+                        settings = processor.get_combined_settings()
+                        print(f"[QR DEBUG] Combined settings: {settings}")
+                        if settings:
+                            detected_settings = settings
+                except Exception as e:
+                    import traceback
+                    print(f"[QR DEBUG] Error scanning {scan_path} for QR: {e}")
+                    traceback.print_exc()
+                    continue
+
+            # Cache the processors and settings for later use (avoids re-scanning)
+            self.cached_scan_processors = processors
+            self.cached_qr_settings = detected_settings
+            print(
+                f"[QR DEBUG] Cached {len(processors)} processor(s), settings: {detected_settings}")
+
+            if detected_settings:
+                print(
+                    f"[QR DEBUG] Applying settings to UI: {detected_settings}")
+                # Update UI on main thread
+                self.after(
+                    0, lambda s=detected_settings: self._apply_detected_settings(s))
+            else:
+                print("[QR DEBUG] No settings detected from any file")
+
+        except Exception as e:
+            import traceback
+            print(f"[QR DEBUG] Error in QR detection thread: {e}")
+            traceback.print_exc()
+
+    def _apply_detected_settings(self, settings):
+        """Apply detected QR settings to the UI fields."""
+        updates_made = []
+
+        # Update rows
+        if settings.get('rows'):
+            self.recon_rows.set(str(settings['rows']))
+            updates_made.append(f"Rows: {settings['rows']}")
+
+        # Update columns
+        if settings.get('cols'):
+            self.recon_cols.set(str(settings['cols']))
+            updates_made.append(f"Columns: {settings['cols']}")
+
+        # Update FPS
+        if settings.get('fps'):
+            self.recon_fps.set(str(settings['fps']))
+            updates_made.append(f"FPS: {settings['fps']}")
+
+        # Switch to Manual mode since we have specific grid settings
+        if settings.get('rows') and settings.get('cols'):
+            self.grid_mode.set("Manual")
+            self._on_grid_mode_change("Manual")
+
+        # Update the scan display to show QR was detected
+        if updates_made:
+            current_display = self.scan_display.get()
+            self.scan_display.set(f"{current_display} ✓ QR")
+
+            # Show brief notification
+            print(f"QR Metadata detected: {', '.join(updates_made)}")
+
+    def browse_recon_output(self):
+        """Browse for reconstruction output directory."""
+        d = filedialog.askdirectory()
+        if d:
+            self.recon_output_path.set(d)
+            self.recon_output_display.set(
+                os.path.basename(d) if os.path.basename(d) else d)
+
+    def start_reconstruction(self):
+        """Start the RISO-to-Video reconstruction process."""
+        if not self.scan_paths:
+            messagebox.showerror(
+                "Error", "Please select scanned sheet images.")
+            return
+
+        if not RECONSTRUCT_AVAILABLE:
+            messagebox.showerror(
+                "Error",
+                "Reconstruction module not available.\n"
+                "Please ensure all dependencies are installed."
+            )
+            return
+
+        self.btn_reconstruct.configure(state="disabled", text="PROCESSING...")
+        self.recon_progress.set(0)
+        self.recon_progress.start()
+
+        threading.Thread(target=self.run_reconstruction, daemon=True).start()
+
+    def run_reconstruction(self):
+        """Run the reconstruction process in a background thread."""
+        try:
+            output_dir = self.recon_output_path.get()
+
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            # Parse settings (may be overridden by QR metadata)
+            try:
+                fps = float(self.recon_fps.get())
+            except ValueError:
+                raise ValueError("Invalid FPS. Please enter a number.")
+
+            rows = None
+            cols = None
+            if self.grid_mode.get() == "Manual":
+                try:
+                    rows = int(self.recon_rows.get())
+                    cols = int(self.recon_cols.get())
+                except ValueError:
+                    raise ValueError(
+                        "Invalid rows/columns. Please enter numbers.")
+
+            all_frames = []
+            qr_settings_applied = False
+
+            # Use cached processors if available (from background QR scan)
+            # This avoids re-scanning files for QR metadata
+            if self.cached_scan_processors and len(self.cached_scan_processors) == len(self.scan_paths):
+                print(
+                    "[Reconstruct] Using cached ScanProcessor objects (no re-scan needed)")
+                processors = self.cached_scan_processors
+            else:
+                # Fall back to creating new processors if cache is empty/stale
+                print("[Reconstruct] Creating new ScanProcessor objects")
+                processors = [ScanProcessor(scan_path)
+                              for scan_path in self.scan_paths]
+
+            # Check for QR metadata from cached settings or first processor
+            if self.cached_qr_settings:
+                qr_settings = self.cached_qr_settings
+                if qr_settings.get('rows') and qr_settings.get('cols'):
+                    rows = qr_settings['rows']
+                    cols = qr_settings['cols']
+                    qr_settings_applied = True
+                    print(
+                        f"Using cached QR metadata: {rows} rows × {cols} cols")
+                if qr_settings.get('fps'):
+                    fps = qr_settings['fps']
+                    print(f"Using cached QR metadata FPS: {fps}")
+
+            # Process each scan using (cached) processors
+            for processor in processors:
+                scans = processor.get_preprocessed_images()
+
+                for idx, scan_image in enumerate(scans):
+                    # Check individual page metadata
+                    page_metadata = processor.metadata[idx] if idx < len(
+                        processor.metadata) else None
+
+                    # Use page-specific metadata if available
+                    page_rows = rows
+                    page_cols = cols
+                    page_frame_count = None
+                    page_cell_width = None
+                    page_cell_height = None
+                    page_margin = None
+                    page_spacing = None
+
+                    if page_metadata:
+                        page_rows = page_metadata.rows or rows
+                        page_cols = page_metadata.cols or cols
+                        page_frame_count = page_metadata.frame_count
+                        # Get exact cell dimensions if available
+                        page_cell_width = page_metadata.cell_width
+                        page_cell_height = page_metadata.cell_height
+                        page_margin = page_metadata.margin
+                        page_spacing = page_metadata.spacing
+
+                        if page_cell_width and page_cell_height:
+                            print(f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, "
+                                  f"{page_frame_count} frames, cell={page_cell_width}x{page_cell_height}, "
+                                  f"margin={page_margin}, spacing={page_spacing}")
+                        else:
+                            print(
+                                f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, {page_frame_count} frames")
+
+                    # Detect grid - pass all available metadata for precise detection
+                    if page_rows and page_cols:
+                        grid = GridDetector.detect(
+                            scan_image,
+                            method="manual",
+                            rows=page_rows,
+                            cols=page_cols,
+                            frame_count=page_frame_count,
+                            cell_width=page_cell_width,
+                            cell_height=page_cell_height,
+                            margin=page_margin,
+                            spacing=page_spacing
+                        )
+                    elif self.grid_mode.get() == "Manual" and rows and cols:
+                        grid = GridDetector.detect(
+                            scan_image,
+                            method="manual",
+                            rows=rows,
+                            cols=cols
+                        )
+                    else:
+                        grid = GridDetector.detect(scan_image, method="auto")
+
+                    # Extract frames
+                    extractor = FrameExtractor(
+                        border_crop=5,
+                        sharpen=False,
+                        preserve_riso_colors=True
+                    )
+                    frames = extractor.extract_frames(scan_image, grid)
+                    print(
+                        f"[Reconstruct] Extracted {len(frames)} frames from page {idx+1}")
+                    all_frames.extend(frames)
+
+            if not all_frames:
+                raise ValueError("No frames extracted from scans.")
+
+            # Show notification if QR settings were used
+            if qr_settings_applied:
+                self.after(
+                    0, lambda: self._show_qr_notification(rows, cols, fps))
+
+            # Assemble video
+            assembler = VideoAssembler(all_frames)
+            assembler.set_fps(fps)
+
+            # Determine output format
+            output_format = self.recon_format.get()
+
+            if output_format == "GIF":
+                output_path = os.path.join(output_dir, "reconstructed.gif")
+                assembler.export_gif(output_path, fps=fps)
+            elif output_format == "Image Sequence":
+                seq_dir = os.path.join(output_dir, "frames")
+                assembler.export_image_sequence(seq_dir)
+                output_path = seq_dir
+            else:
+                ext = "mp4" if output_format == "MP4" else "mov"
+                output_path = os.path.join(output_dir, f"reconstructed.{ext}")
+                assembler.export(output_path, fps=fps)
+
+            self.after(0, lambda p=output_path: self.on_recon_success(p))
+
+        except Exception as e:
+            error_msg = str(e)
+            self.after(0, lambda msg=error_msg: self.on_recon_error(msg))
+
+    def _show_qr_notification(self, rows, cols, fps):
+        """Show a notification that QR settings were detected and applied."""
+        messagebox.showinfo(
+            "QR Metadata Detected",
+            f"Settings from embedded QR code applied:\n\n"
+            f"Grid: {rows} rows × {cols} columns\n"
+            f"FPS: {fps}"
+        )
+
+    def on_recon_success(self, output_path):
+        """Handle successful reconstruction."""
+        self.recon_progress.stop()
+        self.recon_progress.set(1)
+        self.btn_reconstruct.configure(
+            state="normal", text="RECONSTRUCT VIDEO")
+
+        import platform
+        import subprocess
+
+        try:
+            if platform.system() == 'Darwin':
+                if os.path.isdir(output_path):
+                    subprocess.call(('open', output_path))
+                else:
+                    subprocess.call(('open', output_path))
+            elif platform.system() == 'Windows':
+                os.startfile(output_path)
+            else:
+                subprocess.call(('xdg-open', output_path))
+        except Exception as e:
+            print(f"Could not open output: {e}")
+
+        messagebox.showinfo(
+            "Complete",
+            f"Video reconstructed successfully!\n\n{os.path.basename(output_path)}"
+        )
+
+    def on_recon_error(self, msg):
+        """Handle reconstruction error."""
+        self.recon_progress.stop()
+        self.recon_progress.set(0)
+        self.btn_reconstruct.configure(
+            state="normal", text="RECONSTRUCT VIDEO")
+        messagebox.showerror("Error", msg)
 
     def browse_file(self):
         f = filedialog.askopenfilename(
@@ -446,6 +1108,7 @@ class RisoApp(ctk.CTk):
             # 1. Process Video
             processor = VideoProcessor(video_file)
             frames = processor.extract_frames(interval_seconds=interval)
+            fps = processor.fps if hasattr(processor, 'fps') else None
             processor.close()
 
             if not frames:
@@ -458,6 +1121,30 @@ class RisoApp(ctk.CTk):
             sheets = layout.create_sheets(frames, columns=cols)
             thumb_size = layout.get_thumbnail_size()
 
+            # Calculate actual rows per sheet based on printable area and thumb size
+            if thumb_size:
+                printable_height = layout.page_height - (2 * layout.margin)
+                # This is the max rows that can fit on a page
+                max_rows_per_page = int((printable_height + layout.spacing) /
+                                        (thumb_size[1] + layout.spacing))
+            else:
+                max_rows_per_page = 6  # fallback
+
+            # Calculate frames per full sheet
+            frames_per_full_sheet = max_rows_per_page * cols
+
+            # Initialize metadata encoder for QR codes
+            try:
+                metadata_encoder = MetadataEncoder(
+                    # Larger QR for reliable scanning (150px at 300dpi = 0.5 inch)
+                    qr_size=150,
+                    position="bottom-right",
+                    margin=30
+                )
+                qr_available = True
+            except:
+                qr_available = False
+
             self.generated_sheets = []
 
             # 3. Save & Separate
@@ -465,7 +1152,44 @@ class RisoApp(ctk.CTk):
             channel_pages = []
             effect_name = self.selected_effect.get()
 
+            # Track frame positions across sheets
+            frame_start = 0
+            total_frames = len(frames)
+
             for i, sheet in enumerate(sheets):
+                # Calculate how many frames remain for this sheet
+                remaining_frames = total_frames - frame_start
+
+                # Calculate frames on this sheet (can't exceed what fits on a full sheet)
+                frames_on_sheet = min(frames_per_full_sheet, remaining_frames)
+
+                # Calculate actual rows used on this sheet
+                actual_rows = (frames_on_sheet + cols -
+                               1) // cols  # Ceiling division
+
+                # Create metadata for this sheet
+                sheet_metadata = None
+                if qr_available:
+                    sheet_metadata = SheetMetadata(
+                        page_number=i + 1,
+                        total_pages=len(sheets),
+                        rows=actual_rows,
+                        cols=cols,
+                        frame_start=frame_start,
+                        frame_count=frames_on_sheet,
+                        fps=fps,
+                        # Include exact cell dimensions for precise reconstruction
+                        cell_width=thumb_size[0] if thumb_size else None,
+                        cell_height=thumb_size[1] if thumb_size else None,
+                        margin=layout.margin,
+                        spacing=layout.spacing
+                    )
+                    # Add QR code to composite sheet
+                    sheet = metadata_encoder.add_qr_code(
+                        sheet, sheet_metadata, use_compact=True)
+
+                frame_start += frames_on_sheet
+
                 labeled_sheet = layout.add_label(
                     sheet, f"Sheet {i+1} - Composite")
                 composite_pages.append(labeled_sheet)
@@ -500,6 +1224,15 @@ class RisoApp(ctk.CTk):
                     img_black = ImageEffects.apply_effect(
                         channels['Black'], effect_name,
                         thumb_size_pixels=thumb_size, dpi=dpi)
+
+                    # Add QR code to Black channel (will be visible on final print)
+                    if qr_available and sheet_metadata:
+                        # Convert to RGB to add QR, then back to grayscale
+                        img_black_rgb = img_black.convert('RGB')
+                        img_black_rgb = metadata_encoder.add_qr_code(
+                            img_black_rgb, sheet_metadata, use_compact=True)
+                        img_black = img_black_rgb.convert('L')
+
                     lbl_black = layout.add_label(
                         img_black, f"Sheet {i+1} - Black Channel")
                     channel_pages.append(lbl_black)
