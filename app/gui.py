@@ -1396,11 +1396,9 @@ class RisoApp(ctk.CTk):
             result = messagebox.askyesno(
                 "Generate Blank Template",
                 f"No video selected.\n\n"
-                f"Generate a blank {rows}×{cols} grid template for hand-drawing?\n\n"
-                f"This will create:\n"
-                f"• Composite sheet with empty frames\n"
-                f"• CMYK channel separations\n"
-                f"• QR code for reconstruction"
+                f"You can generate a blank {rows}×{cols} grid template for hand-drawing?\n\n"
+                f"This will create a 4 page pdf for the CMYK channels.\n"
+                f"Do you want to proceed?"
             )
             if not result:
                 return
