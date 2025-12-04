@@ -170,6 +170,32 @@ class VideoAssembler:
         """
         self.settings.frame_duration = duration
 
+    def set_resolution(self, width: int, height: int):
+        """
+        Set output resolution.
+
+        Args:
+            width: Output width in pixels
+            height: Output height in pixels
+        """
+        self.settings.resolution = (width, height)
+
+    def set_upscale(self, factor: int):
+        """
+        Set upscale factor for output resolution.
+        Calculates target resolution based on first frame size.
+
+        Args:
+            factor: Scale multiplier (1, 2, 3, 4, etc.)
+        """
+        if factor <= 1 or not self.frames:
+            return
+
+        first_frame = self.frames[0]
+        new_width = first_frame.width * factor
+        new_height = first_frame.height * factor
+        self.settings.resolution = (new_width, new_height)
+
     def export(self,
                output_path: str,
                fps: Optional[float] = None,

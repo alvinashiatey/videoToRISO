@@ -14,6 +14,8 @@ from effects import ImageEffects
 try:
     from reconstruct import ScanProcessor, GridDetector, FrameExtractor, VideoAssembler
     from reconstruct.metadata import MetadataEncoder, SheetMetadata
+    from reconstruct.grid_editor import GridEditorWindow
+    from reconstruct.grid_detect import DetectedGrid, GridCell
     RECONSTRUCT_AVAILABLE = True
 except ImportError:
     RECONSTRUCT_AVAILABLE = False
@@ -108,7 +110,7 @@ class RisoApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
 
         self.title("VIDEO ⟷ RISO")
-        self.geometry("520x680")
+        self.geometry("520x820")
         self.resizable(False, False)
         self.configure(fg_color=DesignToken.BG)
 
@@ -151,11 +153,17 @@ class RisoApp(ctk.CTk):
         self.recon_cols = ctk.StringVar(value="4")
         self.recon_fps = ctk.StringVar(value="12")
         self.recon_format = ctk.StringVar(value="MP4")
+        self.recon_upscale = ctk.StringVar(value="1x (Original)")
         self.grid_mode = ctk.StringVar(value="Auto")
 
         # Cached QR metadata from background scan (avoids re-scanning)
         self.cached_scan_processors = []  # List of ScanProcessor objects with metadata
         self.cached_qr_settings = None  # Combined settings from QR detection
+
+        # Manual grid data from GridEditorWindow
+        # Format: list of dicts with {page_index, cells: [(x, y, w, h), ...]}
+        self.manual_grid_cells = None
+        self.grid_editor_window = None
 
         # Icons
         self.icon_arrow = IconGenerator.create_arrow_icon(
@@ -527,7 +535,7 @@ class RisoApp(ctk.CTk):
         # ═══════════════════════════════════════════════════════════
         # SECTION: GRID SETTINGS
         # ═══════════════════════════════════════════════════════════
-        self.create_section_label(tab, "Grid Detection")
+        self.create_section_label(tab, "Grid Selection")
 
         grid_section = ctk.CTkFrame(
             tab, fg_color=DesignToken.CARD, corner_radius=DesignToken.RADIUS_MD)
@@ -537,31 +545,34 @@ class RisoApp(ctk.CTk):
         grid_inner.pack(fill="x", padx=DesignToken.SPACE_MD,
                         pady=DesignToken.SPACE_MD)
 
-        # Detection mode selector
-        ctk.CTkLabel(
-            grid_inner,
-            text="MODE",
-            font=DesignToken.get_font(10, "bold"),
-            text_color=DesignToken.GRAY_500
-        ).pack(anchor="w")
+        # Grid status indicator
+        self.grid_status_frame = ctk.CTkFrame(
+            grid_inner, fg_color="transparent")
+        self.grid_status_frame.pack(fill="x", pady=(0, DesignToken.SPACE_SM))
 
-        ctk.CTkSegmentedButton(
+        self.grid_status_label = ctk.CTkLabel(
+            self.grid_status_frame,
+            text="⚠ No grid defined",
+            font=DesignToken.get_font(11),
+            text_color=DesignToken.GRAY_400
+        )
+        self.grid_status_label.pack(anchor="w")
+
+        # Edit Grid button - opens interactive grid editor (PRIMARY ACTION)
+        self.btn_edit_grid = ctk.CTkButton(
             grid_inner,
-            values=["Auto", "Manual"],
-            variable=self.grid_mode,
-            command=self._on_grid_mode_change,
-            height=28,
+            text="✎ DEFINE GRID",
+            command=self.open_grid_editor,
+            height=40,
             corner_radius=DesignToken.RADIUS_SM,
-            fg_color=DesignToken.BORDER,
-            selected_color=DesignToken.GRAY_500,
-            selected_hover_color=DesignToken.GRAY_400,
-            unselected_color=DesignToken.BORDER,
-            unselected_hover_color=DesignToken.BTN,
+            fg_color=DesignToken.BTN_PRIMARY,
+            hover_color="#2563EB",
             text_color=DesignToken.WHITE,
-            font=DesignToken.get_font(11)
-        ).pack(fill="x", pady=(DesignToken.SPACE_XS, DesignToken.SPACE_MD))
+            font=DesignToken.get_font(12, "bold")
+        )
+        self.btn_edit_grid.pack(fill="x", pady=(0, DesignToken.SPACE_MD))
 
-        # Manual grid settings (rows/cols)
+        # Quick settings row (rows/cols) - collapsed by default
         self.manual_grid_frame = ctk.CTkFrame(
             grid_inner, fg_color="transparent")
         self.manual_grid_frame.pack(fill="x")
@@ -687,6 +698,32 @@ class RisoApp(ctk.CTk):
             font=DesignToken.get_font(12)
         ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
 
+        # Upscale row
+        upscale_row = ctk.CTkFrame(output_inner, fg_color="transparent")
+        upscale_row.pack(fill="x", pady=(DesignToken.SPACE_SM, 0))
+
+        ctk.CTkLabel(
+            upscale_row,
+            text="UPSCALE",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkOptionMenu(
+            upscale_row,
+            variable=self.recon_upscale,
+            values=["1x (Original)", "2x", "3x", "4x"],
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            fg_color=DesignToken.BTN,
+            button_color=DesignToken.GRAY_500,
+            button_hover_color=DesignToken.GRAY_400,
+            dropdown_fg_color=DesignToken.CARD,
+            dropdown_hover_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
+
         # ═══════════════════════════════════════════════════════════
         # RECONSTRUCT BUTTON
         # ═══════════════════════════════════════════════════════════
@@ -715,16 +752,163 @@ class RisoApp(ctk.CTk):
         self.recon_progress.pack(fill="x")
         self.recon_progress.set(0)
 
-        # Initially hide manual grid settings if auto mode
-        self._on_grid_mode_change(self.grid_mode.get())
+        # Update initial grid status
+        self._update_grid_status()
+
+    def _update_grid_status(self):
+        """Update the grid status label based on current state."""
+        if self.manual_grid_cells:
+            # Count total frames across all pages
+            total_frames = sum(len(page.get('cells', []))
+                               for page in self.manual_grid_cells)
+            rows = self.recon_rows.get()
+            cols = self.recon_cols.get()
+            self.grid_status_label.configure(
+                text=f"✓ Grid defined: {rows}×{cols} ({total_frames} frames)",
+                text_color="#22C55E"  # Green
+            )
+            self.btn_edit_grid.configure(text="✎ EDIT GRID")
+        else:
+            self.grid_status_label.configure(
+                text="⚠ No grid defined - click below to define",
+                text_color=DesignToken.GRAY_400
+            )
+            self.btn_edit_grid.configure(text="✎ DEFINE GRID")
 
     def _on_grid_mode_change(self, mode):
-        """Show/hide manual grid settings based on mode."""
-        if mode == "Manual":
-            self.manual_grid_frame.pack(fill="x")
-        else:
-            # Keep it visible but could disable in future
-            pass
+        """Legacy method - kept for compatibility."""
+        self._update_grid_status()
+
+    def open_grid_editor(self):
+        """Open the interactive grid editor window."""
+        if not self.scan_paths:
+            messagebox.showwarning(
+                "No Scans Selected",
+                "Please select scanned sheet images first."
+            )
+            return
+
+        if not RECONSTRUCT_AVAILABLE:
+            messagebox.showerror(
+                "Error",
+                "Reconstruction module not available."
+            )
+            return
+
+        # Load images for the grid editor
+        try:
+            from PIL import Image
+            images = []
+
+            # Use cached processors if available
+            if self.cached_scan_processors:
+                for processor in self.cached_scan_processors:
+                    preprocessed = processor.get_preprocessed_images()
+                    for img in preprocessed:
+                        # Convert numpy array to PIL Image if needed
+                        if hasattr(img, 'shape'):
+                            import numpy as np
+                            if img.dtype != np.uint8:
+                                img = (img * 255).astype(np.uint8)
+                            pil_img = Image.fromarray(img)
+                        else:
+                            pil_img = img
+                        images.append(pil_img)
+            else:
+                # Load directly from files
+                for path in self.scan_paths:
+                    if path.lower().endswith('.pdf'):
+                        # Use ScanProcessor for PDF handling
+                        processor = ScanProcessor(path)
+                        preprocessed = processor.get_preprocessed_images()
+                        for img in preprocessed:
+                            if hasattr(img, 'shape'):
+                                import numpy as np
+                                if img.dtype != np.uint8:
+                                    img = (img * 255).astype(np.uint8)
+                                pil_img = Image.fromarray(img)
+                            else:
+                                pil_img = img
+                            images.append(pil_img)
+                    else:
+                        img = Image.open(path)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        images.append(img)
+
+            if not images:
+                messagebox.showerror("Error", "No images could be loaded.")
+                return
+
+            # Get initial grid size from current settings or QR metadata
+            try:
+                initial_rows = int(self.recon_rows.get())
+            except (ValueError, TypeError):
+                initial_rows = 5
+
+            try:
+                initial_cols = int(self.recon_cols.get())
+            except (ValueError, TypeError):
+                initial_cols = 6
+
+            # Get spacing from QR metadata if available
+            initial_spacing = 10  # default
+            if self.cached_qr_settings and self.cached_qr_settings.get('spacing'):
+                initial_spacing = self.cached_qr_settings['spacing']
+
+            # Debug: Check if we have existing grid data
+            print(
+                f"[GUI] Opening grid editor with existing_grid_data: {self.manual_grid_cells is not None}")
+            if self.manual_grid_cells:
+                print(
+                    f"[GUI] Existing grid has {len(self.manual_grid_cells)} page(s)")
+
+            # Create and show the grid editor, passing existing grid if available
+            self.grid_editor_window = GridEditorWindow(
+                self,  # parent
+                images,
+                initial_grid=(initial_rows, initial_cols),
+                initial_spacing=initial_spacing,
+                existing_grid_data=self.manual_grid_cells,  # Restore previous grid
+                callback=self._on_grid_editor_apply
+            )
+
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Failed to open grid editor:\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+
+    def _on_grid_editor_apply(self, grid_data):
+        """Callback when user applies the grid in the editor.
+
+        Args:
+            grid_data: List of dicts with:
+                - 'page_index': int
+                - 'cells': list of (x, y, w, h) tuples
+                - 'rows': int
+                - 'cols': int
+        """
+        self.manual_grid_cells = grid_data
+        self.grid_editor_window = None
+
+        # Update UI to show grid has been set
+        if grid_data:
+            rows = grid_data[0].get('rows', '?')
+            cols = grid_data[0].get('cols', '?')
+
+            # Update rows/cols entries
+            self.recon_rows.set(str(rows))
+            self.recon_cols.set(str(cols))
+
+            total_cells = sum(len(page['cells']) for page in grid_data)
+            print(
+                f"[Grid Editor] Applied grid: {len(grid_data)} page(s), {total_cells} total cells")
+
+        # Update the grid status display
+        self._update_grid_status()
 
     def browse_scans(self):
         """Browse for scanned contact sheet images."""
@@ -741,6 +925,10 @@ class RisoApp(ctk.CTk):
             # Clear cached data from previous selection
             self.cached_scan_processors = []
             self.cached_qr_settings = None
+            self.manual_grid_cells = None
+
+            # Update grid status
+            self._update_grid_status()
 
             if len(files) == 1:
                 self.scan_display.set(os.path.basename(files[0]))
@@ -919,63 +1107,119 @@ class RisoApp(ctk.CTk):
                     print(f"Using cached QR metadata FPS: {fps}")
 
             # Process each scan using (cached) processors
+            page_counter = 0  # Track global page index for manual grid lookup
+
             for processor in processors:
                 scans = processor.get_preprocessed_images()
 
                 for idx, scan_image in enumerate(scans):
-                    # Check individual page metadata
-                    page_metadata = processor.metadata[idx] if idx < len(
-                        processor.metadata) else None
+                    # Check if we have manually selected grid cells for this page
+                    manual_cells = None
+                    manual_grid_info = None
+                    if self.manual_grid_cells:
+                        for page_data in self.manual_grid_cells:
+                            if page_data.get('page_index') == page_counter:
+                                manual_cells = page_data.get('cells', [])
+                                manual_grid_info = page_data
+                                print(
+                                    f"[Reconstruct] Using {len(manual_cells)} manually selected cells for page {page_counter + 1}")
+                                break
 
-                    # Use page-specific metadata if available
-                    page_rows = rows
-                    page_cols = cols
-                    page_frame_count = None
-                    page_cell_width = None
-                    page_cell_height = None
-                    page_margin = None
-                    page_spacing = None
+                    if manual_cells and manual_grid_info:
+                        # Create DetectedGrid from manually selected cells
+                        # Each cell is (x, y, w, h)
+                        grid_cells = []
+                        num_rows = manual_grid_info.get('rows', 1)
+                        num_cols = manual_grid_info.get('cols', 1)
 
-                    if page_metadata:
-                        page_rows = page_metadata.rows or rows
-                        page_cols = page_metadata.cols or cols
-                        page_frame_count = page_metadata.frame_count
-                        # Get exact cell dimensions if available
-                        page_cell_width = page_metadata.cell_width
-                        page_cell_height = page_metadata.cell_height
-                        page_margin = page_metadata.margin
-                        page_spacing = page_metadata.spacing
+                        for i, (x, y, w, h) in enumerate(manual_cells):
+                            row_idx = i // num_cols
+                            col_idx = i % num_cols
+                            grid_cells.append(GridCell(
+                                x=int(x), y=int(y),
+                                width=int(w), height=int(h),
+                                row=row_idx, col=col_idx
+                            ))
 
-                        if page_cell_width and page_cell_height:
-                            print(f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, "
-                                  f"{page_frame_count} frames, cell={page_cell_width}x{page_cell_height}, "
-                                  f"margin={page_margin}, spacing={page_spacing}")
+                        # Calculate average cell size and origin
+                        if grid_cells:
+                            avg_width = sum(
+                                c.width for c in grid_cells) // len(grid_cells)
+                            avg_height = sum(
+                                c.height for c in grid_cells) // len(grid_cells)
+                            origin_x = min(c.x for c in grid_cells)
+                            origin_y = min(c.y for c in grid_cells)
                         else:
-                            print(
-                                f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, {page_frame_count} frames")
+                            avg_width = avg_height = 100
+                            origin_x = origin_y = 0
 
-                    # Detect grid - pass all available metadata for precise detection
-                    if page_rows and page_cols:
-                        grid = GridDetector.detect(
-                            scan_image,
-                            method="manual",
-                            rows=page_rows,
-                            cols=page_cols,
-                            frame_count=page_frame_count,
-                            cell_width=page_cell_width,
-                            cell_height=page_cell_height,
-                            margin=page_margin,
-                            spacing=page_spacing
-                        )
-                    elif self.grid_mode.get() == "Manual" and rows and cols:
-                        grid = GridDetector.detect(
-                            scan_image,
-                            method="manual",
-                            rows=rows,
-                            cols=cols
+                        grid = DetectedGrid(
+                            cells=grid_cells,
+                            rows=num_rows,
+                            cols=num_cols,
+                            cell_width=avg_width,
+                            cell_height=avg_height,
+                            origin=(origin_x, origin_y),
+                            spacing_x=0,
+                            spacing_y=0,
+                            frame_count=len(grid_cells)
                         )
                     else:
-                        grid = GridDetector.detect(scan_image, method="auto")
+                        # Fall back to automatic/metadata-based detection
+                        # Check individual page metadata
+                        page_metadata = processor.metadata[idx] if idx < len(
+                            processor.metadata) else None
+
+                        # Use page-specific metadata if available
+                        page_rows = rows
+                        page_cols = cols
+                        page_frame_count = None
+                        page_cell_width = None
+                        page_cell_height = None
+                        page_margin = None
+                        page_spacing = None
+
+                        if page_metadata:
+                            page_rows = page_metadata.rows or rows
+                            page_cols = page_metadata.cols or cols
+                            page_frame_count = page_metadata.frame_count
+                            # Get exact cell dimensions if available
+                            page_cell_width = page_metadata.cell_width
+                            page_cell_height = page_metadata.cell_height
+                            page_margin = page_metadata.margin
+                            page_spacing = page_metadata.spacing
+
+                            if page_cell_width and page_cell_height:
+                                print(f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, "
+                                      f"{page_frame_count} frames, cell={page_cell_width}x{page_cell_height}, "
+                                      f"margin={page_margin}, spacing={page_spacing}")
+                            else:
+                                print(
+                                    f"[Reconstruct] Page {idx+1}: {page_rows}x{page_cols}, {page_frame_count} frames")
+
+                        # Detect grid - pass all available metadata for precise detection
+                        if page_rows and page_cols:
+                            grid = GridDetector.detect(
+                                scan_image,
+                                method="manual",
+                                rows=page_rows,
+                                cols=page_cols,
+                                frame_count=page_frame_count,
+                                cell_width=page_cell_width,
+                                cell_height=page_cell_height,
+                                margin=page_margin,
+                                spacing=page_spacing
+                            )
+                        elif self.grid_mode.get() == "Manual" and rows and cols:
+                            grid = GridDetector.detect(
+                                scan_image,
+                                method="manual",
+                                rows=rows,
+                                cols=cols
+                            )
+                        else:
+                            grid = GridDetector.detect(
+                                scan_image, method="auto")
 
                     # Extract frames
                     extractor = FrameExtractor(
@@ -985,8 +1229,11 @@ class RisoApp(ctk.CTk):
                     )
                     frames = extractor.extract_frames(scan_image, grid)
                     print(
-                        f"[Reconstruct] Extracted {len(frames)} frames from page {idx+1}")
+                        f"[Reconstruct] Extracted {len(frames)} frames from page {page_counter + 1}")
                     all_frames.extend(frames)
+
+                    # Increment page counter
+                    page_counter += 1
 
             if not all_frames:
                 raise ValueError("No frames extracted from scans.")
@@ -999,6 +1246,19 @@ class RisoApp(ctk.CTk):
             # Assemble video
             assembler = VideoAssembler(all_frames)
             assembler.set_fps(fps)
+
+            # Apply upscale factor
+            upscale_str = self.recon_upscale.get()
+            upscale_factor = 1
+            if upscale_str.startswith("2x"):
+                upscale_factor = 2
+            elif upscale_str.startswith("3x"):
+                upscale_factor = 3
+            elif upscale_str.startswith("4x"):
+                upscale_factor = 4
+
+            if upscale_factor > 1:
+                assembler.set_upscale(upscale_factor)
 
             # Determine output format
             output_format = self.recon_format.get()

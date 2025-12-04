@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="videoToRISO",
-    version="1.0.0",
+    version="0.2.0",
     description="A tool to convert video frames into RISO-ready contact sheets.",
     author="Alvin Kwabena",
     packages=find_packages(),

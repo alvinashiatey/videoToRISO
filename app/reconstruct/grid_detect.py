@@ -194,7 +194,7 @@ class GridDetector:
                     row=row, col=col
                 ))
 
-        return DetectedGrid(
+        initial_grid = DetectedGrid(
             cells=cells,
             rows=rows,
             cols=cols,
@@ -205,6 +205,8 @@ class GridDetector:
             spacing_y=spacing_y,
             frame_count=frame_count
         )
+
+        return self.refine_grid_with_contours(image, initial_grid)
 
     def detect_from_exact_layout(self,
                                  image: Image.Image,
@@ -279,7 +281,7 @@ class GridDetector:
                     row=row, col=col
                 ))
 
-        return DetectedGrid(
+        initial_grid = DetectedGrid(
             cells=cells,
             rows=rows,
             cols=cols,
@@ -290,6 +292,100 @@ class GridDetector:
             spacing_y=scaled_spacing_y,
             frame_count=frame_count
         )
+
+        # Refine the grid by snapping to actual content contours
+        return self.refine_grid_with_contours(image, initial_grid)
+
+    def refine_grid_with_contours(self, image: Image.Image, grid: 'DetectedGrid') -> 'DetectedGrid':
+        """
+        Refine the detected grid by snapping cells to actual content contours.
+        This improves cropping accuracy by adapting to slight misalignments.
+        """
+        try:
+            cv_image = self._pil_to_cv(image)
+            gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+
+            # Adaptive threshold to find content
+            binary = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, 25, 10
+            )
+
+            # Clean up noise
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+            contours, _ = cv2.findContours(
+                cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            refined_cells = []
+
+            for cell in grid.cells:
+                # Define search window (expand cell slightly)
+                pad_x = int(cell.width * 0.2)
+                pad_y = int(cell.height * 0.2)
+
+                search_x = max(0, cell.x - pad_x)
+                search_y = max(0, cell.y - pad_y)
+                search_w = cell.width + 2 * pad_x
+                search_h = cell.height + 2 * pad_y
+
+                best_contour = None
+                max_overlap = 0
+
+                cell_area = cell.width * cell.height
+
+                for cnt in contours:
+                    x, y, w, h = cv2.boundingRect(cnt)
+
+                    # Check if contour center is roughly in the search window
+                    cx = x + w // 2
+                    cy = y + h // 2
+
+                    if (cx >= search_x and cy >= search_y and
+                        cx <= search_x + search_w and
+                            cy <= search_y + search_h):
+
+                        # Check size similarity (allow some variation)
+                        area = w * h
+                        if 0.5 * cell_area < area < 1.5 * cell_area:
+                            # Calculate overlap with original cell
+                            overlap_x = max(
+                                0, min(cell.x + cell.width, x + w) - max(cell.x, x))
+                            overlap_y = max(
+                                0, min(cell.y + cell.height, y + h) - max(cell.y, y))
+                            overlap_area = overlap_x * overlap_y
+
+                            if overlap_area > max_overlap:
+                                max_overlap = overlap_area
+                                best_contour = (x, y, w, h)
+
+                if best_contour:
+                    # Use the found contour
+                    bx, by, bw, bh = best_contour
+                    refined_cells.append(GridCell(
+                        x=bx, y=by, width=bw, height=bh,
+                        row=cell.row, col=cell.col
+                    ))
+                else:
+                    # Keep original if no good match found
+                    refined_cells.append(cell)
+
+            # Return new grid with refined cells
+            return DetectedGrid(
+                cells=refined_cells,
+                rows=grid.rows,
+                cols=grid.cols,
+                cell_width=grid.cell_width,
+                cell_height=grid.cell_height,
+                origin=grid.origin,
+                spacing_x=grid.spacing_x,
+                spacing_y=grid.spacing_y,
+                frame_count=grid.frame_count
+            )
+        except Exception as e:
+            print(f"[GridDetect] Refinement failed: {e}")
+            return grid
 
     def _detect_content_bounds(self, image: Image.Image) -> Optional[Tuple[int, int, int, int]]:
         """

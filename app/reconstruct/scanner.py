@@ -146,6 +146,10 @@ class ScanProcessor:
             'total_pages': first.total_pages,
             'original_resolution': first.original_resolution,
             'video_hash': first.video_hash,
+            'cell_width': first.cell_width,
+            'cell_height': first.cell_height,
+            'margin': first.margin,
+            'spacing': first.spacing,
         }
 
         # Sort metadata by page number for proper frame ordering
