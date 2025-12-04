@@ -4,7 +4,9 @@ import threading
 import os
 import sys
 import tempfile
-from PIL import Image, ImageTk, ImageDraw
+import platform
+import subprocess
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 from processor import VideoProcessor
 from layout import LayoutEngine
@@ -22,7 +24,7 @@ except ImportError:
 
 
 class DesignToken:
-    """Swiss/International Style Design System"""
+    """Design System"""
 
     # Colors - Minimal, high contrast
     BLACK = "#000000"
@@ -109,7 +111,7 @@ class RisoApp(ctk.CTk):
         # Set dark appearance
         ctk.set_appearance_mode("dark")
 
-        self.title("VIDEO ⟷ RISO")
+        self.title("videoToRISO")
         self.geometry("520x820")
         self.resizable(False, False)
         self.configure(fg_color=DesignToken.BG)
@@ -135,6 +137,8 @@ class RisoApp(ctk.CTk):
 
         self.columns = ctk.IntVar(value=5)
         self.columns_str = ctk.StringVar(value="5")  # For segmented button
+        # Rows per page for blank templates
+        self.rows = ctk.StringVar(value="6")
         self.interval = ctk.StringVar(value="0.5")
         self.selected_effect = ctk.StringVar(value="None")
 
@@ -334,15 +338,40 @@ class RisoApp(ctk.CTk):
             font=DesignToken.get_font(11)
         ).pack(fill="x", pady=(DesignToken.SPACE_XS, DesignToken.SPACE_MD))
 
-        # Row 2: Interval and Effect side by side
+        # Row 2: Rows and Interval side by side
         row2 = ctk.CTkFrame(settings_inner, fg_color="transparent")
         row2.pack(fill="x")
         row2.columnconfigure(0, weight=1)
-        row2.columnconfigure(1, weight=2)
+        row2.columnconfigure(1, weight=1)
+        row2.columnconfigure(2, weight=2)
+
+        # Rows (for blank templates)
+        rows_frame = ctk.CTkFrame(row2, fg_color="transparent")
+        rows_frame.grid(row=0, column=0, sticky="ew",
+                        padx=(0, DesignToken.SPACE_MD))
+
+        ctk.CTkLabel(
+            rows_frame,
+            text="ROWS",
+            font=DesignToken.get_font(10, "bold"),
+            text_color=DesignToken.GRAY_500
+        ).pack(anchor="w")
+
+        ctk.CTkEntry(
+            rows_frame,
+            textvariable=self.rows,
+            height=28,
+            corner_radius=DesignToken.RADIUS_SM,
+            border_width=1,
+            border_color=DesignToken.BORDER,
+            fg_color=DesignToken.BTN,
+            text_color=DesignToken.WHITE,
+            font=DesignToken.get_font(12)
+        ).pack(fill="x", pady=(DesignToken.SPACE_XS, 0))
 
         # Interval
         int_frame = ctk.CTkFrame(row2, fg_color="transparent")
-        int_frame.grid(row=0, column=0, sticky="ew",
+        int_frame.grid(row=0, column=1, sticky="ew",
                        padx=(0, DesignToken.SPACE_MD))
 
         ctk.CTkLabel(
@@ -366,7 +395,7 @@ class RisoApp(ctk.CTk):
 
         # Effect dropdown
         effect_frame = ctk.CTkFrame(row2, fg_color="transparent")
-        effect_frame.grid(row=0, column=1, sticky="ew")
+        effect_frame.grid(row=0, column=2, sticky="ew")
 
         ctk.CTkLabel(
             effect_frame,
@@ -803,7 +832,9 @@ class RisoApp(ctk.CTk):
             # Use cached processors if available
             if self.cached_scan_processors:
                 for processor in self.cached_scan_processors:
-                    preprocessed = processor.get_preprocessed_images()
+                    # Disable auto_crop for grid editor - user will manually select the grid area
+                    preprocessed = processor.get_preprocessed_images(
+                        auto_crop=False)
                     for img in preprocessed:
                         # Convert numpy array to PIL Image if needed
                         if hasattr(img, 'shape'):
@@ -820,7 +851,9 @@ class RisoApp(ctk.CTk):
                     if path.lower().endswith('.pdf'):
                         # Use ScanProcessor for PDF handling
                         processor = ScanProcessor(path)
-                        preprocessed = processor.get_preprocessed_images()
+                        # Disable auto_crop for grid editor - user will manually select the grid area
+                        preprocessed = processor.get_preprocessed_images(
+                            auto_crop=False)
                         for img in preprocessed:
                             if hasattr(img, 'shape'):
                                 import numpy as np
@@ -1102,15 +1135,18 @@ class RisoApp(ctk.CTk):
                     qr_settings_applied = True
                     print(
                         f"Using cached QR metadata: {rows} rows × {cols} cols")
-                if qr_settings.get('fps'):
-                    fps = qr_settings['fps']
-                    print(f"Using cached QR metadata FPS: {fps}")
+                # Note: FPS from UI takes priority - do NOT override with QR metadata
+                # The user may have manually changed the FPS value
 
             # Process each scan using (cached) processors
             page_counter = 0  # Track global page index for manual grid lookup
 
             for processor in processors:
-                scans = processor.get_preprocessed_images()
+                # Use auto_crop=False when we have manual grid cells to ensure
+                # the image coordinates match what was selected in the grid editor
+                use_auto_crop = not bool(self.manual_grid_cells)
+                scans = processor.get_preprocessed_images(
+                    auto_crop=use_auto_crop)
 
                 for idx, scan_image in enumerate(scans):
                     # Check if we have manually selected grid cells for this page
@@ -1135,9 +1171,14 @@ class RisoApp(ctk.CTk):
                         for i, (x, y, w, h) in enumerate(manual_cells):
                             row_idx = i // num_cols
                             col_idx = i % num_cols
+                            # Ensure valid dimensions (at least 1 pixel)
+                            cell_w = max(1, int(w))
+                            cell_h = max(1, int(h))
+                            cell_x = max(0, int(x))
+                            cell_y = max(0, int(y))
                             grid_cells.append(GridCell(
-                                x=int(x), y=int(y),
-                                width=int(w), height=int(h),
+                                x=cell_x, y=cell_y,
+                                width=cell_w, height=cell_h,
                                 row=row_idx, col=col_idx
                             ))
 
@@ -1341,15 +1382,247 @@ class RisoApp(ctk.CTk):
                 os.path.basename(d) if os.path.basename(d) else d)
 
     def start_generation(self):
-        if not self.video_path.get():
-            messagebox.showerror("Error", "Please select a video file.")
-            return
+        # Allow generation without video (blank template mode)
+        is_blank_template = not self.video_path.get()
+
+        if is_blank_template:
+            # Show confirmation dialog for blank template
+            cols = self.columns.get()
+            try:
+                rows = int(self.rows.get())
+            except ValueError:
+                rows = 6
+
+            result = messagebox.askyesno(
+                "Generate Blank Template",
+                f"No video selected.\n\n"
+                f"Generate a blank {rows}×{cols} grid template for hand-drawing?\n\n"
+                f"This will create:\n"
+                f"• Composite sheet with empty frames\n"
+                f"• CMYK channel separations\n"
+                f"• QR code for reconstruction"
+            )
+            if not result:
+                return
 
         self.btn_run.configure(state="disabled", text="PROCESSING...")
         self.progress.set(0)
         self.progress.start()
 
-        threading.Thread(target=self.run_process, daemon=True).start()
+        if is_blank_template:
+            threading.Thread(
+                target=self.run_blank_template_process, daemon=True).start()
+        else:
+            threading.Thread(target=self.run_process, daemon=True).start()
+
+    def run_blank_template_process(self):
+        """Generate blank template sheets for hand-drawing frames."""
+        try:
+            output_dir = self.output_path.get()
+            cols = self.columns.get()
+
+            try:
+                rows = int(self.rows.get())
+            except ValueError:
+                raise ValueError("Invalid rows. Please enter a number.")
+
+            if rows < 1 or rows > 20:
+                raise ValueError("Rows must be between 1 and 20.")
+
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            # Create layout engine
+            dpi = 300
+            layout = LayoutEngine(paper_size="LETTER", dpi=dpi)
+
+            # Calculate cell dimensions based on page size
+            printable_width = layout.page_width - (2 * layout.margin)
+            printable_height = layout.page_height - (2 * layout.margin)
+
+            total_spacing_x = (cols - 1) * layout.spacing
+            total_spacing_y = (rows - 1) * layout.spacing
+
+            cell_width = int((printable_width - total_spacing_x) / cols)
+            cell_height = int((printable_height - total_spacing_y) / rows)
+
+            # Use 16:9 aspect ratio for cells if it fits, otherwise use calculated size
+            target_aspect = 16 / 9
+            current_aspect = cell_width / cell_height
+
+            if current_aspect > target_aspect:
+                # Width is too large, reduce it
+                cell_width = int(cell_height * target_aspect)
+            else:
+                # Height is too large, reduce it
+                cell_height = int(cell_width / target_aspect)
+
+            # Create blank sheet with grid
+            sheet = Image.new(
+                "RGB", (layout.page_width, layout.page_height), "white")
+            draw = ImageDraw.Draw(sheet)
+
+            # Calculate starting position to center the grid
+            total_grid_width = (cols * cell_width) + \
+                ((cols - 1) * layout.spacing)
+            total_grid_height = (rows * cell_height) + \
+                ((rows - 1) * layout.spacing)
+            start_x = (layout.page_width - total_grid_width) // 2
+            start_y = (layout.page_height - total_grid_height) // 2
+
+            # Draw grid of rectangles (no frame numbers)
+            line_width = 1  # pixels
+            for row in range(rows):
+                for col in range(cols):
+                    x = start_x + col * (cell_width + layout.spacing)
+                    y = start_y + row * (cell_height + layout.spacing)
+
+                    # Draw rectangle outline in gray (50% opacity)
+                    draw.rectangle(
+                        [x, y, x + cell_width, y + cell_height],
+                        outline="#808080",
+                        width=line_width
+                    )
+
+            # Initialize metadata encoder for QR codes
+            frame_count = rows * cols
+            try:
+                metadata_encoder = MetadataEncoder(
+                    qr_size=150,
+                    position="bottom-right",
+                    margin=30
+                )
+
+                # Create metadata for this template
+                sheet_metadata = SheetMetadata(
+                    page_number=1,
+                    total_pages=1,
+                    rows=rows,
+                    cols=cols,
+                    frame_start=0,
+                    frame_count=frame_count,
+                    fps=12,  # Default FPS for hand-drawn animation
+                    cell_width=cell_width,
+                    cell_height=cell_height,
+                    margin=layout.margin,
+                    spacing=layout.spacing
+                )
+
+                # Add QR code to composite sheet
+                sheet = metadata_encoder.add_qr_code(
+                    sheet, sheet_metadata, use_compact=True)
+                qr_available = True
+            except Exception as e:
+                print(f"QR code generation failed: {e}")
+                qr_available = False
+                sheet_metadata = None
+
+            # For blank templates, we draw the grid directly on each channel
+            # (CMYK separation doesn't work for black lines - they only appear in K)
+
+            # Helper function to create a channel page with grid
+            def create_channel_page(channel_name):
+                """Create a blank channel page with grid lines."""
+                # White background (255 = no ink for RISO)
+                page = Image.new(
+                    "L", (layout.page_width, layout.page_height), 255)
+                page_draw = ImageDraw.Draw(page)
+
+                # Draw grid lines in gray (128 = 50% ink)
+                for row in range(rows):
+                    for col in range(cols):
+                        x = start_x + col * (cell_width + layout.spacing)
+                        y = start_y + row * (cell_height + layout.spacing)
+                        page_draw.rectangle(
+                            [x, y, x + cell_width, y + cell_height],
+                            outline=128,  # Gray (50% opacity)
+                            width=line_width
+                        )
+                return page
+
+            # Build PDF pages (channels only, no composite)
+            channel_pages = []
+
+            # Process each channel - create identical grid pages for each
+            if self.use_cyan.get():
+                img_cyan = create_channel_page("Cyan")
+                lbl_cyan = layout.add_label(
+                    img_cyan, "Blank Template - Cyan Channel")
+                channel_pages.append(lbl_cyan)
+
+            if self.use_magenta.get():
+                img_magenta = create_channel_page("Magenta")
+                lbl_magenta = layout.add_label(
+                    img_magenta, "Blank Template - Magenta Channel")
+                channel_pages.append(lbl_magenta)
+
+            if self.use_yellow.get():
+                img_yellow = create_channel_page("Yellow")
+                lbl_yellow = layout.add_label(
+                    img_yellow, "Blank Template - Yellow Channel")
+                channel_pages.append(lbl_yellow)
+
+            if self.use_black.get():
+                img_black = create_channel_page("Black")
+
+                # Add QR code to Black channel (will be visible on final print)
+                if qr_available and sheet_metadata:
+                    img_black_rgb = img_black.convert('RGB')
+                    img_black_rgb = metadata_encoder.add_qr_code(
+                        img_black_rgb, sheet_metadata, use_compact=True)
+                    img_black = img_black_rgb.convert('L')
+
+                lbl_black = layout.add_label(
+                    img_black, "Blank Template - Black Channel")
+                channel_pages.append(lbl_black)
+
+            # Save channels PDF only
+            channels_pdf_path = None
+
+            if channel_pages:
+                channels_pdf_path = os.path.join(
+                    output_dir, "blank_template_channels.pdf")
+
+                # Save as grayscale PDF to preserve the 50% opacity (gray) lines
+                channel_pages[0].save(
+                    channels_pdf_path,
+                    save_all=True,
+                    append_images=channel_pages[1:] if len(
+                        channel_pages) > 1 else [],
+                    resolution=300.0
+                )
+
+            self.after(0, lambda ch=channels_pdf_path:
+                       self.on_template_success(ch))
+
+        except Exception as e:
+            self.after(0, lambda msg=str(e): self.on_error(msg))
+
+    def on_template_success(self, channels_pdf_path):
+        """Handle successful blank template generation."""
+        self.progress.stop()
+        self.progress.set(1)
+        self.btn_run.configure(state="normal", text="GENERATE")
+
+        # Open the channels PDF
+        if channels_pdf_path and os.path.exists(channels_pdf_path):
+            try:
+                if platform.system() == 'Darwin':
+                    subprocess.call(('open', channels_pdf_path))
+                elif platform.system() == 'Windows':
+                    os.startfile(channels_pdf_path)
+                else:
+                    subprocess.call(('xdg-open', channels_pdf_path))
+            except Exception as e:
+                print(f"Could not open PDF: {e}")
+
+        messagebox.showinfo(
+            "Template Created",
+            f"Blank template generated!\n\n"
+            f"File: {os.path.basename(channels_pdf_path)}\n\n"
+            "Print the channel sheets and hand-draw your frames in each cell.\n"
+            "The QR code will help with automatic reconstruction."
+        )
 
     def run_process(self):
         try:

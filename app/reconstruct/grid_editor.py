@@ -93,6 +93,7 @@ class GridEditorWindow(ctk.CTkToplevel):
         # Per-page grid state
         self.page_grids: Dict[int, Tuple[float, float, float, float]] = {}
         self.page_cells: Dict[int, List[CellBounds]] = {}
+        self.page_rotations: Dict[int, float] = {}  # Store rotation per page
 
         # Current page grid state
         self.grid_rect: Optional[Tuple[float, float, float, float]] = None
@@ -118,6 +119,13 @@ class GridEditorWindow(ctk.CTkToplevel):
         # Handle selection for adjustment
         self.selected_handle: Optional[str] = None
         self.handle_size = 8
+
+        # Grid rotation state (degrees)
+        self.grid_rotation = 0.0  # Rotation angle of the grid in degrees
+        # Center of rotation
+        self.rotation_center: Optional[Tuple[float, float]] = None
+        self.is_rotating = False
+        self.rotation_start_angle = 0.0
 
         # Image cache
         self.photo_image: Optional[ImageTk.PhotoImage] = None
@@ -574,8 +582,13 @@ class GridEditorWindow(ctk.CTkToplevel):
         self.bind("<Return>", lambda e: self._confirm())
         self.bind("<KeyPress-space>", self._on_space_press)
         self.bind("<KeyRelease-space>", self._on_space_release)
+        # Tool shortcuts: D=Draw, A=Adjust, P=Pan
         self.bind("<d>", lambda e: self._set_tool("draw"))
+        self.bind("<D>", lambda e: self._set_tool("draw"))
         self.bind("<a>", lambda e: self._set_tool("adjust"))
+        self.bind("<A>", lambda e: self._set_tool("adjust"))
+        self.bind("<p>", lambda e: self._set_tool("pan"))
+        self.bind("<P>", lambda e: self._set_tool("pan"))
         self.bind("<plus>", lambda e: self.zoom_in())
         self.bind("<minus>", lambda e: self.zoom_out())
         self.bind("<equal>", lambda e: self.zoom_in())  # + without shift
@@ -713,7 +726,9 @@ class GridEditorWindow(ctk.CTkToplevel):
         if self.current_tool == "adjust" and self.grid_rect:
             handle = self._get_handle_at(event.x, event.y)
             if handle:
-                if handle in ["nw", "se"]:
+                if handle == "rotate":
+                    self.canvas.configure(cursor="exchange")
+                elif handle in ["nw", "se"]:
                     self.canvas.configure(cursor="sizing")
                 elif handle in ["ne", "sw"]:
                     self.canvas.configure(cursor="sizing")
@@ -840,8 +855,10 @@ class GridEditorWindow(ctk.CTkToplevel):
             'cols': self.cols,
             'spacing': self.spacing,
             'grid_rect': self.grid_rect,
+            'grid_rotation': self.grid_rotation,
             'page_grids': self.page_grids.copy(),
             'page_cells': {k: v[:] for k, v in self.page_cells.items()},
+            'page_rotations': self.page_rotations.copy(),
             'excluded_frames': self.excluded_frames.copy(),
             'current_page': self.current_page,
             'result_cells': self.result_cells[:] if self.result_cells else None
@@ -873,8 +890,10 @@ class GridEditorWindow(ctk.CTkToplevel):
             self.cols = state['cols']
             self.spacing = state['spacing']
             self.grid_rect = state['grid_rect']
+            self.grid_rotation = state.get('grid_rotation', 0.0)
             self.page_grids = state['page_grids']
             self.page_cells = state['page_cells']
+            self.page_rotations = state.get('page_rotations', {})
             self.excluded_frames = state['excluded_frames']
             self.result_cells = state['result_cells']
 
@@ -957,6 +976,7 @@ class GridEditorWindow(ctk.CTkToplevel):
             return
 
         self.grid_rect = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        self.grid_rotation = 0.0  # Reset rotation when drawing new grid
         self._calculate_cells()
         self._redraw()
         self._update_preview()
@@ -1004,7 +1024,7 @@ class GridEditorWindow(ctk.CTkToplevel):
                 ))
 
     def _get_handle_at(self, cx: int, cy: int) -> Optional[str]:
-        """Check if canvas position is over a resize handle."""
+        """Check if canvas position is over a resize or rotation handle."""
         if not self.grid_rect:
             return None
 
@@ -1015,6 +1035,12 @@ class GridEditorWindow(ctk.CTkToplevel):
         cx2, cy2 = self._image_to_canvas(x2, y2)
 
         hs = self.handle_size
+
+        # Check rotation handle (circle above top center)
+        rot_x = (cx1 + cx2) / 2
+        rot_y = cy1 - 30  # 30 pixels above top edge
+        if ((cx - rot_x) ** 2 + (cy - rot_y) ** 2) ** 0.5 < hs + 4:
+            return "rotate"
 
         # Check corners
         if abs(cx - cx1) < hs and abs(cy - cy1) < hs:
@@ -1044,12 +1070,41 @@ class GridEditorWindow(ctk.CTkToplevel):
         self.drag_start_pos = self._canvas_to_image(event.x, event.y)
         self.drag_start_rect = self.grid_rect
 
+        # For rotation, store initial angle
+        if self.selected_handle == "rotate" and self.grid_rect:
+            x1, y1, x2, y2 = self.grid_rect
+            self.rotation_center = ((x1 + x2) / 2, (y1 + y2) / 2)
+            # Calculate initial angle from center to mouse
+            dx = self.drag_start_pos[0] - self.rotation_center[0]
+            dy = self.drag_start_pos[1] - self.rotation_center[1]
+            import math
+            self.rotation_start_angle = math.degrees(math.atan2(dy, dx))
+            self.drag_start_rotation = self.grid_rotation
+
     def _drag_handle(self, event):
         """Update grid rect while dragging a handle."""
         if not self.selected_handle or not self.drag_start_rect:
             return
 
         current = self._canvas_to_image(event.x, event.y)
+
+        # Handle rotation
+        if self.selected_handle == "rotate" and self.rotation_center:
+            import math
+            dx = current[0] - self.rotation_center[0]
+            dy = current[1] - self.rotation_center[1]
+            current_angle = math.degrees(math.atan2(dy, dx))
+            angle_diff = current_angle - self.rotation_start_angle
+            self.grid_rotation = self.drag_start_rotation + angle_diff
+            # Normalize to -180 to 180
+            while self.grid_rotation > 180:
+                self.grid_rotation -= 360
+            while self.grid_rotation < -180:
+                self.grid_rotation += 360
+            self._calculate_cells()
+            self._redraw()
+            return
+
         dx = current[0] - self.drag_start_pos[0]
         dy = current[1] - self.drag_start_pos[1]
 
@@ -1103,24 +1158,68 @@ class GridEditorWindow(ctk.CTkToplevel):
         if not self.result_cells:
             return
 
-        for cell in self.result_cells:
-            # Convert to canvas coords
-            cx1, cy1 = self._image_to_canvas(cell.x1, cell.y1)
-            cx2, cy2 = self._image_to_canvas(cell.x2, cell.y2)
+        import math
 
-            # Draw cell rectangle
-            self.canvas.create_rectangle(
-                cx1, cy1, cx2, cy2,
+        # Get grid center for rotation
+        if self.grid_rect:
+            gx1, gy1, gx2, gy2 = self.grid_rect
+            grid_center = ((gx1 + gx2) / 2, (gy1 + gy2) / 2)
+        else:
+            grid_center = (0, 0)
+
+        angle_rad = math.radians(self.grid_rotation)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+
+        def rotate_point(x, y):
+            """Rotate point around grid center."""
+            if self.grid_rotation == 0:
+                return x, y
+            # Translate to origin
+            dx = x - grid_center[0]
+            dy = y - grid_center[1]
+            # Rotate
+            rx = dx * cos_a - dy * sin_a
+            ry = dx * sin_a + dy * cos_a
+            # Translate back
+            return grid_center[0] + rx, grid_center[1] + ry
+
+        for cell in self.result_cells:
+            # Get corners in image coords
+            corners_img = [
+                (cell.x1, cell.y1),
+                (cell.x2, cell.y1),
+                (cell.x2, cell.y2),
+                (cell.x1, cell.y2)
+            ]
+
+            # Rotate corners if needed
+            if self.grid_rotation != 0:
+                corners_img = [rotate_point(x, y) for x, y in corners_img]
+
+            # Convert to canvas coords
+            corners_canvas = [self._image_to_canvas(
+                x, y) for x, y in corners_img]
+
+            # Draw cell polygon
+            self.canvas.create_polygon(
+                *[coord for point in corners_canvas for coord in point],
                 outline="#00FF00",
+                fill="",
                 width=2
             )
 
-            # Draw cell number
+            # Draw cell number at center
+            center_img = ((cell.x1 + cell.x2) / 2, (cell.y1 + cell.y2) / 2)
+            if self.grid_rotation != 0:
+                center_img = rotate_point(*center_img)
+            center_canvas = self._image_to_canvas(*center_img)
+
             idx = cell.row * self.cols + cell.col + 1
             font_size = max(8, int(12 * self.zoom_level))
             self.canvas.create_text(
-                (cx1 + cx2) / 2,
-                (cy1 + cy2) / 2,
+                center_canvas[0],
+                center_canvas[1],
                 text=str(idx),
                 fill="#00FF00",
                 font=("Arial", font_size, "bold")
@@ -1131,7 +1230,7 @@ class GridEditorWindow(ctk.CTkToplevel):
             self._draw_handles()
 
     def _draw_handles(self):
-        """Draw resize handles on the grid corners and edges."""
+        """Draw resize handles on the grid corners and edges, plus rotation handle."""
         if not self.grid_rect:
             return
 
@@ -1140,6 +1239,28 @@ class GridEditorWindow(ctk.CTkToplevel):
         cx2, cy2 = self._image_to_canvas(x2, y2)
 
         hs = self.handle_size
+        mx = (cx1 + cx2) / 2
+        my = (cy1 + cy2) / 2
+
+        # Rotation handle - circle above top center with connecting line
+        rot_y = cy1 - 30
+        # Draw connecting line
+        self.canvas.create_line(
+            mx, cy1, mx, rot_y,
+            fill="#00FF00", width=2
+        )
+        # Draw rotation circle
+        self.canvas.create_oval(
+            mx - hs - 2, rot_y - hs - 2,
+            mx + hs + 2, rot_y + hs + 2,
+            fill="#FF6600", outline="#FFFFFF", width=2
+        )
+        # Draw rotation icon (circular arrow hint)
+        self.canvas.create_arc(
+            mx - 5, rot_y - 5, mx + 5, rot_y + 5,
+            start=45, extent=270, style="arc",
+            outline="#FFFFFF", width=2
+        )
 
         # Corner handles
         corners = [
@@ -1154,8 +1275,6 @@ class GridEditorWindow(ctk.CTkToplevel):
             )
 
         # Edge handles
-        mx = (cx1 + cx2) / 2
-        my = (cy1 + cy2) / 2
         edges = [
             (mx, cy1), (mx, cy2),
             (cx1, my), (cx2, my)
@@ -1165,6 +1284,15 @@ class GridEditorWindow(ctk.CTkToplevel):
             self.canvas.create_rectangle(
                 x - hs/2, y - hs/2, x + hs/2, y + hs/2,
                 fill="#00FF00", outline="#FFFFFF"
+            )
+
+        # Show rotation angle if not zero
+        if self.grid_rotation != 0:
+            self.canvas.create_text(
+                mx, rot_y - 20,
+                text=f"{self.grid_rotation:.1f}°",
+                fill="#FF6600",
+                font=("Helvetica", 10, "bold")
             )
 
     def _update_preview(self):
@@ -1186,16 +1314,65 @@ class GridEditorWindow(ctk.CTkToplevel):
         start_idx = self.preview_page * self.previews_per_page
         end_idx = min(start_idx + self.previews_per_page, total_frames)
 
+        # For rotated grids, we need to calculate the rotated corners
+        import math
+        if self.grid_rect and self.grid_rotation != 0:
+            gx1, gy1, gx2, gy2 = self.grid_rect
+            grid_center = ((gx1 + gx2) / 2, (gy1 + gy2) / 2)
+            angle_rad = math.radians(self.grid_rotation)
+            cos_a = math.cos(angle_rad)
+            sin_a = math.sin(angle_rad)
+
+            def rotate_point(x, y):
+                dx = x - grid_center[0]
+                dy = y - grid_center[1]
+                rx = dx * cos_a - dy * sin_a
+                ry = dx * sin_a + dy * cos_a
+                return grid_center[0] + rx, grid_center[1] + ry
+        else:
+            def rotate_point(x, y): return (x, y)
+
         for i in range(start_idx, end_idx):
             cell = self.result_cells[i]
             try:
-                # Clamp bounds to image size
-                x1 = max(0, min(cell.x1, self.original_size[0]))
-                y1 = max(0, min(cell.y1, self.original_size[1]))
-                x2 = max(0, min(cell.x2, self.original_size[0]))
-                y2 = max(0, min(cell.y2, self.original_size[1]))
+                # Get cell corners and rotate if needed
+                corners = [
+                    (cell.x1, cell.y1),
+                    (cell.x2, cell.y1),
+                    (cell.x2, cell.y2),
+                    (cell.x1, cell.y2)
+                ]
 
-                if x2 <= x1 or y2 <= y1:
+                if self.grid_rotation != 0:
+                    corners = [rotate_point(x, y) for x, y in corners]
+
+                # Get bounding box of rotated corners
+                xs = [c[0] for c in corners]
+                ys = [c[1] for c in corners]
+
+                # Calculate proper min/max
+                min_x, max_x = min(xs), max(xs)
+                min_y, max_y = min(ys), max(ys)
+
+                # Clamp to image bounds
+                x1 = max(0, min(min_x, self.original_size[0] - 1))
+                y1 = max(0, min(min_y, self.original_size[1] - 1))
+                x2 = max(0, min(max_x, self.original_size[0]))
+                y2 = max(0, min(max_y, self.original_size[1]))
+
+                # Ensure coordinates are integers
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+                # Final validation - ensure x2 > x1 and y2 > y1
+                if x2 <= x1:
+                    x2 = x1 + 1
+                if y2 <= y1:
+                    y2 = y1 + 1
+
+                # Skip if region is too small or outside image
+                if x1 >= self.original_size[0] or y1 >= self.original_size[1]:
+                    continue
+                if x2 - x1 < 2 or y2 - y1 < 2:
                     continue
 
                 # Crop frame from original image
@@ -1488,6 +1665,8 @@ class GridEditorWindow(ctk.CTkToplevel):
             self.page_grids[self.current_page] = self.grid_rect
         if self.result_cells:
             self.page_cells[self.current_page] = self.result_cells
+        # Always save rotation (even if 0)
+        self.page_rotations[self.current_page] = self.grid_rotation
 
     def _restore_grid_data(self, grid_data: List[Dict]):
         """Restore previously saved grid data.
@@ -1545,8 +1724,12 @@ class GridEditorWindow(ctk.CTkToplevel):
 
     def _load_page(self, page_index: int):
         """Load a specific page."""
+        # Load the image for this page
         self.scan_image = self.scan_images[page_index]
         self.original_size = self.scan_image.size
+
+        # Restore grid rotation for this page (default to 0 if not set)
+        self.grid_rotation = self.page_rotations.get(page_index, 0.0)
 
         # Restore grid for this page if we have one
         self.grid_rect = self.page_grids.get(page_index)
@@ -1555,7 +1738,7 @@ class GridEditorWindow(ctk.CTkToplevel):
         # Update page label
         if hasattr(self, 'page_label'):
             self.page_label.configure(
-                text=f"Page {page_index + 1} / {len(self.scan_images)}"
+                text=f"PAGE {page_index + 1} / {len(self.scan_images)}"
             )
 
         # Update button states
@@ -1628,6 +1811,7 @@ class GridEditorWindow(ctk.CTkToplevel):
                 - cols: int
                 - spacing: int
                 - excluded_indices: list of original indices that were excluded
+                - rotation: float (grid rotation in degrees)
         """
         if not self.confirmed:
             return None
@@ -1636,8 +1820,37 @@ class GridEditorWindow(ctk.CTkToplevel):
 
         for page_idx in range(len(self.scan_images)):
             cells = self.page_cells.get(page_idx, [])
+            rotation = self.page_rotations.get(page_idx, 0.0)
+
             if cells:
+                # Get grid center for rotation
+                grid_rect = self.page_grids.get(page_idx)
+                if grid_rect:
+                    cx = (grid_rect[0] + grid_rect[2]) / 2
+                    cy = (grid_rect[1] + grid_rect[3]) / 2
+                else:
+                    # Fallback to calculating from cells
+                    all_x = [c.x1 for c in cells] + [c.x2 for c in cells]
+                    all_y = [c.y1 for c in cells] + [c.y2 for c in cells]
+                    cx = (min(all_x) + max(all_x)) / 2
+                    cy = (min(all_y) + max(all_y)) / 2
+
+                # Rotation helper
+                import math
+                rad = math.radians(rotation)
+                cos_a = math.cos(rad)
+                sin_a = math.sin(rad)
+
+                def rotate_point(x, y):
+                    dx = x - cx
+                    dy = y - cy
+                    return (
+                        cx + dx * cos_a - dy * sin_a,
+                        cy + dx * sin_a + dy * cos_a
+                    )
+
                 # Convert CellBounds to (x, y, w, h) tuples, excluding removed frames
+                # Apply rotation to get actual cell positions
                 cell_tuples = []
                 excluded_indices = []
 
@@ -1645,9 +1858,26 @@ class GridEditorWindow(ctk.CTkToplevel):
                     if hasattr(self, 'excluded_frames') and i in self.excluded_frames:
                         excluded_indices.append(i)
                         continue
-                    cell_tuples.append(
-                        (cell.x1, cell.y1, cell.x2 - cell.x1, cell.y2 - cell.y1)
-                    )
+
+                    # Get rotated corners
+                    if rotation != 0:
+                        corners = [
+                            rotate_point(cell.x1, cell.y1),
+                            rotate_point(cell.x2, cell.y1),
+                            rotate_point(cell.x2, cell.y2),
+                            rotate_point(cell.x1, cell.y2)
+                        ]
+                        # Get bounding box of rotated cell
+                        xs = [c[0] for c in corners]
+                        ys = [c[1] for c in corners]
+                        x1, y1 = min(xs), min(ys)
+                        x2, y2 = max(xs), max(ys)
+                        cell_tuples.append((x1, y1, x2 - x1, y2 - y1))
+                    else:
+                        cell_tuples.append(
+                            (cell.x1, cell.y1, cell.x2 -
+                             cell.x1, cell.y2 - cell.y1)
+                        )
 
                 result.append({
                     'page_index': page_idx,
@@ -1655,7 +1885,8 @@ class GridEditorWindow(ctk.CTkToplevel):
                     'rows': self.rows,
                     'cols': self.cols,
                     'spacing': self.spacing,
-                    'excluded_indices': excluded_indices
+                    'excluded_indices': excluded_indices,
+                    'rotation': rotation
                 })
 
         return result if result else None

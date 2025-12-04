@@ -117,6 +117,17 @@ class FrameExtractor:
         right = min(image.width, right)
         bottom = min(image.height, bottom)
 
+        # Validate that we have a valid crop region
+        if right <= left:
+            right = left + 1
+        if bottom <= top:
+            bottom = top + 1
+
+        # Final safety check - ensure we're within image bounds
+        if left >= image.width or top >= image.height:
+            # Return a small placeholder image
+            return Image.new('RGB', (10, 10), color=(128, 128, 128))
+
         return image.crop((left, top, right, bottom))
 
     def _correct_perspective(self,
