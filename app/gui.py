@@ -130,7 +130,7 @@ class RisoApp(ctk.CTk):
         self.video_path = ctk.StringVar()
         self.video_name_display = ctk.StringVar(value="No file selected")
 
-        default_out = os.path.join(tempfile.gettempdir(), "videoToRISO_output")
+        default_out = os.path.join(tempfile.gettempdir(), "videoToRISO_tmp")
         self.output_path = ctk.StringVar(value=default_out)
         self.output_name_display = ctk.StringVar(
             value=os.path.basename(default_out) or default_out)
