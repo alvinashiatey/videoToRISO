@@ -7,6 +7,8 @@ Also supports QR code metadata detection for automatic settings extraction.
 """
 
 import os
+import sys
+import platform
 from PIL import Image, ImageOps, ExifTags
 import numpy as np
 from typing import List, Optional, Union, Tuple, Dict, Any
@@ -86,7 +88,37 @@ class ScanProcessor:
         """Load pages from a PDF file."""
         try:
             from pdf2image import convert_from_path
-            pages = convert_from_path(self.scan_path, dpi=300)
+
+            poppler_path = None
+
+            # 1. Check if running in PyInstaller bundle (sys.frozen)
+            if getattr(sys, 'frozen', False):
+                # If bundled, look in the internal directory
+                if hasattr(sys, '_MEIPASS'):
+                    # Check for bundled poppler (if user added it to datas)
+                    bundled_path = os.path.join(sys._MEIPASS, 'poppler', 'bin')
+                    if os.path.exists(os.path.join(bundled_path, 'pdftoppm')):
+                        poppler_path = bundled_path
+
+            # 2. If not found in bundle, check system paths on macOS
+            # (macOS app bundles often have stripped PATH, so we must check explicitly)
+            if not poppler_path and platform.system() == "Darwin":
+                possible_paths = [
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    os.path.expanduser("~/bin"),
+                    os.path.expanduser("~/.local/bin")
+                ]
+                for path in possible_paths:
+                    if os.path.exists(os.path.join(path, "pdftoppm")):
+                        poppler_path = path
+                        break
+
+            print(f"DEBUG: Loading PDF with poppler_path: {poppler_path}")
+
+            pages = convert_from_path(
+                self.scan_path, dpi=300, poppler_path=poppler_path)
+
             for i, page in enumerate(pages):
                 self.images.append(page)
                 self.filenames.append(f"page_{i+1}.png")
